@@ -1,51 +1,44 @@
-# Task 1: 调相机 / 读图像并显示 (5 分)
+# Task 1: Capture / read an image and display it (5 marks)
 
-## 目标(摘自作业 PDF)
+## Goal (from assignment PDF)
 > Task 1: Call the camera to capture images and display them. (5 marks)
 
-## 关键决策
+## Key decisions
 
-- **当前用文件输入替代相机**: `code/sky.jpg` 作默认输入。Task 4 再替换为 `cv2.VideoCapture(0)`。
-- **OpenCV** 做图像 IO 与显示: `cv2.imread` (BGR)、`cv2.imshow`、`cv2.waitKey(0)` 按任意键关闭。
-- **默认路径用 `__file__` 解析**,不依赖当前工作目录;命令行第一个参数可覆盖。
-- **异常处理**: `imread` 返回 `None` 时抛 `FileNotFoundError`,避免后续 `imshow` 静默失败。
+- **File input as camera placeholder**: default input is `code/sky.jpg`. Task 4 will swap `cv2.imread` for `cv2.VideoCapture(0).read()`.
+- **OpenCV** for IO and display: `cv2.imread` (BGR), `cv2.imshow`, `cv2.waitKey(0)` (close on any key).
+- **Default path resolved via `__file__`** so the script is cwd-independent. First CLI argument overrides.
+- **Error handling**: raise `FileNotFoundError` when `imread` returns `None`, instead of failing silently inside `imshow`.
 
-## Prompt 草稿
+## Prompt drafts
 
-(本次未用 GenAI;Task 2 起开始记录 prompt 草稿)
+(GenAI not used for this task; prompt drafts will be recorded starting from Task 2.)
 
-## 代码改动
+## Code changes
 
-- 新增 `code/capture.py`(约 22 行): 读图 → 校验 → 打印 shape → 弹窗 → 等待键退出。
-- `code/sky.jpg`: Task 1 的输入文件(测试用图)。
+- New `code/capture.py` (~22 lines): read -> validate -> print shape -> show -> wait key -> exit.
+- `code/sky.jpg`: Task 1 input image.
 
-## 问题与解决方案
+## Problems and solutions
 
-- **WSL 环境无 GUI**: `cv2.imshow` 在当前 shell (WSL) 无法弹窗,必须在 Windows 终端跑。
-- **opencv 可能未装**: `../venv` 基础包只含 torch / d2l / numpy,OpenCV 需额外装(见 §验证)。
+- **WSL has no GUI**: `cv2.imshow` cannot pop a window in the current shell. Verification must run in a Windows terminal.
+- **OpenCV availability**: `../venv` already ships with `opencv-python 5.0.0.93`, no extra install needed.
 
-## 验证(在 Windows 终端跑)
+## Verification (run in Windows terminal)
 
 ```bash
 cd "D:\Program Files\learn_torch\python-cv\Assignment1"
-..\venv\Scripts\activate            # PowerShell
-python code/capture.py              # 用默认 sky.jpg
-python code/capture.py code/sky.jpg # 显式传参
+..\venv\Scripts\python code/capture.py              # default sky.jpg
+..\venv\Scripts\python code/capture.py code/sky.jpg # explicit arg
 ```
 
-预期:
-- 弹出窗口显示 sky.jpg。
-- 终端打印 `input = ... shape = (H, W, 3) dtype = uint8`。
-- 按任意键窗口关闭、程序退出。
+Expected:
+- Window pops up showing sky.jpg.
+- Terminal prints `input = ... shape = (H, W, 3) dtype = uint8`.
+- Any key closes the window and exits the program.
 
-如果 `ModuleNotFoundError: No module named 'cv2'`,执行:
+## Known limitations / TODOs
 
-```bash
-pip install opencv-python
-```
-
-## 已知局限 / 待办
-
-- 仍未接真实相机(留给 Task 4)。
-- 未做 resize / 灰度 / 颜色转换(T1 不要求)。
-- 单张图,不循环(T4 再加 while 循环)。
+- No real camera yet (deferred to Task 4).
+- No resize / grayscale / color conversion (not required by Task 1).
+- Single image, no loop (Task 4 will add a `while` loop).
