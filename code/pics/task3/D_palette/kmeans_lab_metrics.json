@@ -1,0 +1,40 @@
+{
+  "PSNR": 17.730858462430334,
+  "SSIM": 0.36028588171132,
+  "MS-SSIM": 0.494839925790859,
+  "Delta_E_2000": 9.05449466156795,
+  "Edge_F1": 0.18499142936967858,
+  "Edge_Precision": 0.16172559015848387,
+  "Edge_Recall": 0.21607613681511179,
+  "EPI": -0.04247262814019027,
+  "Quant_Error": 5.929641252216253,
+  "Budget_Util": 0.432,
+  "N_Triangles": 4320.0,
+  "FPS": 0.058561665271401844,
+  "N_Cells": 2160.0,
+  "Palette_Util": 1.0,
+  "K": 8.0,
+  "S_set": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    32
+  ],
+  "partition": "quadtree",
+  "priority": "mse",
+  "palette_method": "kmeans_lab",
+  "counts_per_K": [
+    688,
+    513,
+    941,
+    518,
+    90,
+    931,
+    207,
+    432
+  ],
+  "group": "D_palette",
+  "name": "kmeans_lab"
+}

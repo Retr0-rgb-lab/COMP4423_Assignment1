@@ -1,0 +1,40 @@
+{
+  "PSNR": 17.660653839714342,
+  "SSIM": 0.35539280527295164,
+  "MS-SSIM": 0.4923042056322999,
+  "Delta_E_2000": 9.701545973636064,
+  "Edge_F1": 0.22332937684955603,
+  "Edge_Precision": 0.18701199285532025,
+  "Edge_Recall": 0.27715173185971753,
+  "EPI": -0.044618627649960045,
+  "Quant_Error": 6.7414964503562125,
+  "Budget_Util": 0.432,
+  "N_Triangles": 4320.0,
+  "FPS": 0.052332578704165585,
+  "N_Cells": 2160.0,
+  "Palette_Util": 1.0,
+  "K": 8.0,
+  "S_set": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    32
+  ],
+  "partition": "quadtree",
+  "priority": "mse",
+  "palette_method": "median_cut",
+  "counts_per_K": [
+    1150,
+    909,
+    602,
+    289,
+    274,
+    94,
+    362,
+    640
+  ],
+  "group": "D_palette",
+  "name": "median_cut"
+}

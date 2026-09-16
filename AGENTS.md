@@ -59,12 +59,32 @@ Assignment1/
 - 编辑 `docs/materials/` 下的任何文件
 - **把输入测试图直接放在 `code/` 根下**——必须放到 `code/pics/` 子目录
 
-### 1.1 图片存放规则(2026-09-16 新增)
+### 1.1 图片存放规则(2026-09-16 第二次修订)
 
-- **输入图**(测试用原图 / 相机抓拍 / 下载样例)→ `code/pics/`
-- **输出图**(程序生成的积木画 / 热力图 / 指标条形图)→ 保留在 `code/` 根(因为它们是程序产物,不是"图片素材")
-- 理由:把"输入"和"输出"在文件系统上分开,避免误把生成的图当成测试图;也让 pics/ 在 Git 里一眼可识别
-- 例外:Task 5 报告里引用的图,**必须**有原图在 `code/pics/` 或 `code/` 中,**报告里只引用,不重新生成**
+- **所有图片**(输入图 + 输出图 + 指标可视化)→ 一律放 `code/pics/`
+- 按 Task 分子目录组织,每组实验自成单元:
+  ```
+  code/pics/
+  ├── sky.jpg                          ← Task 1/2/3/4 共享输入
+  ├── task2/                           ← Task 2 输出(后续)
+  ├── task3/
+  │   ├── A_ksweep/                    ← 实验组 A:K sweep
+  │   │   ├── k04.png                  ← 渲染图
+  │   │   ├── k04_size_hist.png        ← 尺寸分布
+  │   │   ├── k04_palette.png          ← 调色板色块
+  │   │   └── k04_metrics.json         ← 9 指标
+  │   ├── B_sweep/                     ← S 集合 sweep
+  │   ├── C_algorithm/                 ← quadtree vs region-merge
+  │   ├── D_palette/                   ← K-Means Lab vs Median Cut
+  │   ├── E_priority/                  ← ΔMSE/6 vs ΔEdgeF1/6
+  │   └── summary/                     ← 跨组汇总
+  │       ├── metrics_table.csv        ← 一行一个实验,12 列指标
+  │       ├── metrics_chart.png        ← 12 条 × N 指标柱状图
+  │       └── best_vs_task2.png        ← 终极2×2 对比
+  └── task4/                           ← Task 4 实时相机截图(待写)
+  ```
+- **报告引用**统一锚点:`code/pics/task3/A_ksweep/k08.png` 这种格式
+- 理由:把"所有图"集中在一个目录,git / 报告 / 协作都好管理;按 Task 子目录让每组实验自成单元
 
 ---
 
