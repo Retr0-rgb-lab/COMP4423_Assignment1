@@ -1,5 +1,97 @@
 # Task 3: Adaptive multi-size + multi-color triangle-brick (10 marks)
 
+> ⭐ **2026-09-16 post-mortem (most important read in this file):** see
+> [§0 Key Findings](#0-key-findings-post-mortem) below. Five issues surface
+> from the 11-run experiment grid that reframe what Task 3 means in practice
+> — the headline: under the 10000-triangle budget on a 1706×1279 image,
+> `S_max=32` starting grid already fits the budget, so **quadtree never
+> actually splits** and our adaptive-geometry sweep is largely a no-op.
+
+## 0. Key Findings (post-mortem)
+
+Five problems surfaced during the 11-run sweep. The first one is the load-
+bearing observation; the rest follow from it.
+
+### 0.1 Budget vs geometry: the fundamental tension
+
+```
+10000-triangle budget
+1706 × 1279 image ≈ 2.18 M pixels
+critical cell size  = sqrt(2 · 2.18 M / 10000) ≈ 21 × 21 pixels
+S_max in our S_set  = 32 × 32  pixels (1024 pixels per cell)
+```
+
+Because `S_max=32` is **already smaller than the critical size (~21)**, the
+32-cell starting grid covers only 4240 triangles — well within the 9990
+budget. The quadtree **never gets a chance to split**. There is literally
+no budget headroom for adaptive subdivision in this configuration.
+
+This is a **task-design issue, not an algorithm issue**: with a stricter
+budget or larger image, or with a smaller `S_max`, the same algorithm
+behaves very differently.
+
+### 0.2 Most of the sweep is effectively a no-op
+
+- **A_ksweep (K ∈ {4, 8, 16})** — valid. Geometry is held constant, only
+  quantization varies. This is the only meaningful comparison we got.
+- **B_sweep (S_set variations)** — **invalid**. Three runs produce
+  bit-identical metrics. S_set doesn't matter when the quadtree
+  never splits.
+- **C_algorithm (quadtree vs region_merge)** — **incomplete**. region_merge
+  was never exercised in this batch: with `S_max=32`, the quadtree's
+  starting grid already fits the budget, so the fallback never triggers.
+  In practice region_merge and quadtree are the same algorithm here.
+- **D_palette (K-Means Lab vs Median Cut)** — valid. Different quantization
+  on the same geometry.
+- **E_priority (ΔMSE vs ΔEdgeF1)** — **invalid**. Priority only matters
+  when the quadtree is *splitting*, which it isn't.
+
+So 11 runs were produced but only 5 (the 3 in A + 2 in D) carry a real
+signal.
+
+### 0.3 EPI stays negative: uniform grid is structurally misaligned
+
+Every method scores EPI ≈ −0.04 to −0.07. The triangle boundaries
+introduce **fake edges** that don't correspond to image content. This is
+the structural defect of *any* uniform grid; it cannot be fixed by tuning
+K, palette, or priority. To make EPI turn positive, triangle boundaries
+must physically follow image edges — which means the quadtree must
+actually split, and the priority must be edge-driven.
+
+**The real Task 3 research question — boundary alignment — was not
+addressed by any of our 11 runs.**
+
+### 0.4 region_merge stalling at S_min=1 is a physics signal, not a bug
+
+Even with summed-area tables + multi-scale BFS + O(N log N) heap,
+region_merge plateaus at ~89% completion when `S_min=1` on this image.
+The remaining ~10% of single-pixel cells all straddle image edges and
+cannot form valid 2×2 sibling groups.
+
+This tells us something important: **any "fine-to-coarse" adaptive
+algorithm hits ~10% unmergeable cells on real images**. The only fixes are
+(1) keep those cells as size-1 (cheap but adds budget pressure), or
+(2) allow irregular merging (breaks the "right isosceles" constraint,
+prohibited by the assignment).
+
+### 0.5 The core research question of Task 3 was sidestepped
+
+Task 3's surface requirement is "multi-size + multi-color". But the actual
+research question is **"how do triangle boundaries track image edges?"**.
+Our sweep produced 11 results, but **zero** of them tests boundary
+alignment — geometry was held constant, EPI never moved. To make the
+next iteration meaningful we need:
+
+- A starting grid that **forces** the quadtree to split (start finer than
+  the budgeted size, then either accept over-budget output or merge a few
+  steps back).
+- Edge-driven priority (Sobel/ΔEdgeF1) and verify that EPI turns positive
+  in the regions where splitting actually happens.
+- Real comparison: same image, fixed S_max, but start fine vs start coarse,
+  measure how much EPI / Edge-F1 improve when splitting is exercised.
+
+---
+
 ## Goal (from assignment PDF)
 > Convert an input image into a mosaic of right isosceles triangles using
 > **multiple sizes** (e.g., 1/2/4/8) and **more than 3 colors** (palette size K).
