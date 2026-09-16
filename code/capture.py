@@ -9,7 +9,7 @@ import sys
 import os
 
 # Default input: sky.jpg in the same directory as this script (cwd-independent).
-INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sky.jpg")
+INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jpg")
 
 
 def main():

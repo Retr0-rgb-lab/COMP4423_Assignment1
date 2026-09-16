@@ -33,7 +33,7 @@ from skimage import color, feature, filters
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 
-DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sky.jpg")
+DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jpg")
 DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out_task2.png")
 MAX_TRIANGLES = 10000
 BORDER_COLOR_BGR = (60, 60, 60)        # dark gray; not counted as one of 3 colors
