@@ -452,12 +452,34 @@ painted with one colour. The per-pixel squared error of that is small (it is
 averaged over a flat region) but the *accumulated* perceptual colour error is
 large. ΔMSE cannot see "large-area uniform drift"; the human eye can.
 
-**Shape of the curve.** The quality-vs-S_max curve is therefore **not
-monotonic**: ΔE2000 is best at S_max=32 and worsens for 64/128/256 (which are
-all identical — the greedy converges to the same tiling), while the
-structure metrics rise from 32 to 64 then saturate. The optimum depends on
-whether one weights edges or large-area colour. (S_max must be a power of two,
-so the region between 32 and 64 could not be sampled.)
+**Shape of the curve** (figure: `code/pics/task3/analysis/smax_curve.png`,
+reproducible via `code/task3_smax_curve.py`). The two metric families move in
+**opposite directions**:
+
+| S_max | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|
+| ΔE2000 (lower better) | **10.61** | 11.77 | 11.79 | 11.79 |
+| SSIM (higher better) | 0.375 | 0.415 | 0.415 | 0.415 |
+| Edge F1 (higher better) | 0.322 | 0.403 | 0.402 | 0.402 |
+
+- ΔE2000 is **best at 32, then worsens and plateaus** — monotone-worsening then
+  flat, *not* a U-shape.
+- SSIM / Edge F1 / EPI rise from 32 to 64, then plateau.
+
+So there is **no single best S_max**: 32 wins on large-area colour, 64+ wins
+on structure/edges, and the "optimum" depends on the weighting. Note the ΔE
+optimum is at the **boundary** of the tested range (S_max=32); the true
+perceptual optimum may lie *below* 32, which the quadtree cannot start from
+on this image (a finer start exceeds the 10000-triangle budget). 128 and 256
+are identical to 64.
+
+**Correction.** An earlier verbal summary called the ΔE curve
+"non-monotonic / concave (U-shaped)". That was imprecise: the measured curve
+is monotone-worsening then flat, with its best point at the smallest tested
+S_max, not an interior optimum. Corrected description is the table above.
+This is another instance of the reporting bias in §9.2/9.3 — describing a
+curve by the shape that fits the running narrative rather than by the
+measured values.
 
 **Candidate fixes (not yet implemented).** Replace the ΔMSE priority with a
 perceptual objective — ΔE2000, Δ(1−SSIM), or a multi-scale term — so that
