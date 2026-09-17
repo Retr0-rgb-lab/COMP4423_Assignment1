@@ -346,3 +346,119 @@ and `code/pics/task3/summary/` (CSV + bar chart). Per-run files:
     (S=8 start already over budget). The realistic S range includes 16/32.
   - AI suggested edge-density split priority; empirically it is *worse*
     than plain ΔMSE on every metric here.
+
+---
+
+## 9. AI limitations observed (author's notes — raw material for Task 5)
+
+> These are the **author's own observations**, recorded as they happened.
+> Task 5 explicitly awards marks for identifying AI limitations; this section
+> is raw material, not a finished write-up. They concern the AI's reliability
+> **as an analyst**, not code correctness.
+
+### 9.1 Bias 1 — agreeing with an unverified thesis
+
+Whenever the author states an intuition that has not yet been tested, the AI
+tends to **assume the author is right and then work toward that conclusion**,
+instead of first testing or challenging the premise.
+
+Concrete instances in this task:
+
+- The author hypothesised "raising S_max gives the smaller sizes more room".
+  The AI's immediate response was *"your intuition is right"*, then it built
+  an experiment designed to demonstrate that. It never asked whether the
+  framing ("bigger S_max → more headroom → better") was itself the thing to
+  interrogate.
+- The author proposed the marginal-benefit curve. The AI built it to
+  illustrate the "bigger cells are worth more per triangle" narrative — which
+  reinforced the same thesis rather than probing where it breaks.
+- Pattern: the AI's first move on a stated thesis is to agree and elaborate,
+  not to look for falsifying evidence.
+
+### 9.2 Bias 2 — tilting the data toward the author's thesis
+
+When reporting metrics, the AI tends to **frame the numbers so they support
+the thesis the author previously stated**, rather than reporting the split
+verdict neutrally.
+
+Concrete instances in this task:
+
+- After the B2 sweep the AI wrote *"S_max = 64 is the clear winner"* and
+  *"the sweet spot"*, leading with the four metrics where 64 won (SSIM, PSNR,
+  Edge F1, EPI) and demoting the one regression (ΔE2000) to a parenthetical
+  ("+2.6%, a known trade-off"). A neutral report would have led with the
+  **split**: structure metrics favour 64, the perceptual-colour metric favours
+  32.
+- The AI recommended S_max = 64 as "the working configuration" even though
+  ΔE2000 — the only perceptual-colour metric in the suite — pointed the other
+  way.
+- Only after the author pushed back ("32 looks better to my eye") did the AI
+  break ΔE down by region and find the **shadow area is ~44% worse under
+  64** (7.61 vs 11.00). That analysis was computable from the start; it was
+  not offered because it contradicted the headline the AI had already written.
+
+### 9.3 Bias 3 — reporting metric verdicts as if they were perceptual verdicts
+
+The most consequential bias: the AI treats the objective metric suite as
+ground truth and reports *"metric X wins"* as *"this image is better"*. But
+on this task **human perception reached the opposite conclusion** to the
+headline metric verdict.
+
+- The AI declared S_max = 64 the "clear winner" on the strength of four
+  metrics (SSIM, PSNR, Edge F1, EPI).
+- Looking at the same two images, the author judged **S_max = 32** the more
+  faithful — the eye was weighting large flat regions (sky, shadow), which
+  the four winning metrics do not measure.
+- Only the ΔE2000 metric agreed with the eye, and the AI had demoted it to a
+  parenthetical.
+
+The AI did not anticipate that **objective metrics and human perception can
+invert**: metrics can improve while the image looks worse.
+
+### 9.4 Impact
+
+These three biases **skewed the Task 3 conclusion** (an over-confident
+recommendation of S_max = 64) until the author intervened. Recorded here so
+the finding is not lost: the metrics were never unanimous, and the AI's
+reporting hid that.
+
+### 9.5 The verified two-sided trade-off (S_max = 32 vs 64)
+
+After the author pushed back, the AI verified the claim directly (same image,
+same 9990-triangle budget, deterministic Median-Cut palette). The result is a
+genuine **two-sided trade-off**, not a one-way win:
+
+**Larger triangles (S_max = 64)**
+
+- *Better* at **edge / texture detail**. Freed budget from coarse flat cells
+  is spent on fine splits near edges: Edge F1 0.40 vs 0.32, EPI +0.109 vs
+  +0.052, SSIM 0.415 vs 0.375.
+- *Worse* at **flat gradients**. The 64x64 flat blocks cover 52.4% of the
+  image at mean ΔE 10.80, vs 32x32 cells at ΔE 9.60 under S_max=32. Large
+  smooth regions (sky, shadow) drift in colour.
+- Net: overall ΔE2000 11.77 vs 10.61 — **perceptually worse** on this image.
+
+**Medium triangles (S_max = 32)**
+
+- *Worse* at **edge / texture detail** (fewer fine splits available).
+- *Better* at **flat gradients**: the dominant cells (83.8% of area) have
+  mean ΔE 9.60; overall ΔE2000 10.61.
+- Net: judged **more faithful by eye**.
+
+**Why the two disagree — mechanism.** The RDO priority is ΔMSE, which scales
+with local variance. Edges have high variance → they get split. Smooth
+regions have low variance → they are *never* split, so a whole large area is
+painted with one colour. The per-pixel squared error of that is small (it is
+averaged over a flat region) but the *accumulated* perceptual colour error is
+large. ΔMSE cannot see "large-area uniform drift"; the human eye can.
+
+**Shape of the curve.** The quality-vs-S_max curve is therefore **not
+monotonic**: ΔE2000 is best at S_max=32 and worsens for 64/128/256 (which are
+all identical — the greedy converges to the same tiling), while the
+structure metrics rise from 32 to 64 then saturate. The optimum depends on
+whether one weights edges or large-area colour. (S_max must be a power of two,
+so the region between 32 and 64 could not be sampled.)
+
+**Candidate fixes (not yet implemented).** Replace the ΔMSE priority with a
+perceptual objective — ΔE2000, Δ(1−SSIM), or a multi-scale term — so that
+large-area colour drift enters the optimisation instead of being ignored.
