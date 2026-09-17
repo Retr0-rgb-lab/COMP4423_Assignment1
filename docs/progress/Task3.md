@@ -93,17 +93,25 @@ multiplied by `target_size` again). After the fix, region_merge reaches
 
 `S_set` must be a power-of-two family (the quadtree halves sizes on split).
 
-## 3. Experiment grid (all 12 runs completed)
+## 3. Experiment grid (15 runs)
 
-| Group | Swept variable | Values |
-|---|---|---|
-| **A_ksweep** | K | 4, 8, 16 |
-| **B_sweep** | S_set (S_min) | [2..32], [4..32], [8..32] |
-| **C_algorithm** | partition | quadtree, region_merge (S_set=[4,8,16,32]) |
-| **D_palette** | palette gen | K-Means-LAB, Median-Cut |
-| **E_priority** | split priority | ΔMSE, Sobel-var |
+| Group | Swept variable | Values | note |
+|---|---|---|---|
+| **A_ksweep** | K | 4, 8, 16 | |
+| **B_sweep** | S_set (S_min) | [2..32], [4..32], [8..32] | original B — near no-op, kept as record |
+| **B2_smax** | S_set (S_max) | [1..32], [1..64], [1..128] | "improved B" — added after the marginal-gain analysis |
+| **C_algorithm** | partition | quadtree, region_merge (S_set=[4,8,16,32]) | |
+| **D_palette** | palette gen | K-Means-LAB, Median-Cut | |
+| **E_priority** | split priority | ΔMSE, Sobel-var | |
 
-All 12 hit exactly **9990 triangles (99.9% budget)**.
+All 15 hit **≈9990 triangles (99.9% budget)**.
+
+**Why B and B2 both exist.** The original B varied the *smallest* allowed cell
+(S_min). Empirically that was a no-op: the budget is exhausted by the time
+cells reach size 4, so S_min ∈ {1,2,4} are indistinguishable. The follow-up
+(see §5 research log) showed that the *largest* allowed cell (S_max) is the
+lever that actually matters, so **B2** was added to vary S_max while the
+original B is retained for the record.
 
 ## 4. Results
 
@@ -117,6 +125,9 @@ Full table: `code/pics/task3/summary/metrics_table.csv`.
 | B:s_2_4_8_16_32 | 0.359 | 0.520 | 9.95 | 0.295 | 0.046 | 7.30 |
 | B:s_4_8_16_32 | 0.370 | 0.518 | 10.22 | 0.320 | 0.050 | 7.33 |
 | B:s_8_16_32 | 0.359 | 0.522 | 9.95 | **0.371** | **0.061** | 7.20 |
+| **B2:smax_32** | 0.359 | 0.520 | **9.95** | 0.295 | 0.046 | 7.30 |
+| **B2:smax_64** | **0.421** | **0.555** | 10.21 | **0.377** | **0.109** | 7.41 |
+| **B2:smax_128** | **0.423** | **0.555** | 10.14 | **0.378** | **0.109** | 7.38 |
 | C:quadtree | 0.359 | 0.520 | 9.95 | 0.295 | 0.046 | 7.30 |
 | C:region_merge | 0.332 | 0.522 | **9.59** | 0.298 | 0.019 | **6.47** |
 | D:kmeans_lab | 0.359 | 0.520 | 9.95 | 0.295 | 0.046 | 7.30 |
@@ -135,6 +146,18 @@ Full table: `code/pics/task3/summary/metrics_table.csv`.
   Edge F1 (0.371) and EPI (0.061). Interpretation: tiny 4-pixel cells add
   many boundaries that don't align with real edges, so allowing them hurts
   edge-metric scores even though they can fit more detail nominally.
+- **B2 – S_max sweep (the important one)**: raising S_max from 32 to 64 is a
+  large, unambiguous win on structure/edge metrics — SSIM 0.359 → **0.421**,
+  MS-SSIM 0.520 → **0.555**, Edge F1 0.295 → **0.377**, EPI 0.046 → **0.109**
+  (more than doubled). The only regression is ΔE2000 (9.95 → 10.21, +2.6%).
+  S_max = 128 adds essentially nothing over 64 (SSIM 0.423, EPI 0.109).
+  **Mechanism**: a coarser starting grid (S_max=64 → 1080 start triangles vs
+  4320 at 32) leaves more of the budget for deep splits, so fine cells appear
+  where they matter. The ΔE regression is the flip side: the algorithm
+  *rationally* leaves large 64×64 flat blocks in smooth regions (their
+  marginal benefit per triangle is 68× that of a size-2 split), which raises
+  per-pixel colour error slightly. Structure-vs-colour trade-off again.
+  **Recommendation: S_max = 64** as the working configuration.
 - **C – quadtree vs region_merge**: quadtree wins SSIM (0.359 vs 0.332) and
   EPI (0.046 vs 0.019); region_merge wins ΔE2000 (9.59 vs 9.95) and Quant
   Error (6.47 vs 7.30). Region_merge produces only large cells (its size
@@ -245,7 +268,25 @@ Results (S_set=[1..64], 9820 splits):
   returns).
 - `benefit_by_size.png` — mean marginal benefit grouped by parent size.
 
-### 5.4 Open issue this exposes
+### 5.4 Step 4 — action taken: add B2 (S_max sweep)
+
+Based on §5.2–5.3, a new experiment group **B2_smax** was added:
+S_set = [1..32] / [1..64] / [1..128], i.e. sweeping the *largest* allowed
+cell. The original **B_sweep** (S_min sweep) is **kept unchanged** as part
+of the experimental record, with a note that it turned out to be a no-op.
+
+B2 results (full pipeline) confirm the prediction:
+
+| S_set (S_max) | start tri | SSIM | MS-SSIM | ΔE2000 | Edge F1 | EPI |
+|---|---|---|---|---|---|---|
+| [1..32] | 4320 | 0.359 | 0.520 | **9.95** | 0.295 | 0.046 |
+| **[1..64]** | 1080 | **0.421** | **0.555** | 10.21 | **0.377** | **0.109** |
+| [1..128] | 280 | **0.423** | **0.555** | 10.14 | **0.378** | **0.109** |
+
+S_max = 64 is the sweet spot; 128 gives no further gain. Working
+configuration recommendation: **S_max = 64**.
+
+### 5.5 Open issue this exposes
 
 The marginal-benefit analysis is in **SSE (pixel error)**, not perceptual
 error. A tiny cell at a sharp corner or thin line can have small SSE yet be

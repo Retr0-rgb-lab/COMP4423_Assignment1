@@ -16,12 +16,13 @@ Pipeline:
     8. Metrics (reuse Task 2's 9 metrics) + per-size histogram + palette swatch.
     9. JSON dump + PNG outputs.
 
-Five experiment groups (12 runs total):
-    A_ksweep      : K in {4, 8, 16}                      (3)
-    B_sweep       : S_set in {{1,2,4}, {1,2,4,8}, {1,2,4,8,16}} (3)
-    C_algorithm   : partition in {quadtree, region_merge}(2)
-    D_palette     : palette in {kmeans_lab, median_cut} (2)
-    E_priority    : priority in {mse, edgef1}            (2)
+Six experiment groups (15 runs total):
+    A_ksweep      : K in {4, 8, 16}                         (3)
+    B_sweep       : S_min in {2, 4, 8} (kept as record)     (3)
+    B2_smax       : S_max in {32, 64, 128} (improved B)     (3)
+    C_algorithm   : partition in {quadtree, region_merge}   (2)
+    D_palette     : palette in {kmeans_lab, median_cut}     (2)
+    E_priority    : priority in {mse, edgef1}               (2)
 """
 import argparse
 import csv
@@ -576,11 +577,27 @@ def build_experiment_grid(out_root):
         configs.append(c)
 
     # B. S-set sweep (subsets of powers-of-two that include S_max=32 so quadtree
-# finishes in microseconds; S_min=1 is impractical under the 10000 budget.)
+    # finishes in microseconds; S_min=1 is impractical under the 10000 budget.)
+    # NOTE: kept as-is for the record. The B-group "S_min" sweep turned out to
+    # be a near no-op (budget binds at size 4), which motivated B2 below.
     s_sets = [[2, 4, 8, 16, 32], [4, 8, 16, 32], [8, 16, 32]]
     for s_set in s_sets:
         tag = "_".join(str(s) for s in s_set)
         c = Task3Config(name=f"s_{tag}", group="B_sweep", S_set=s_set)
+        configs.append(c)
+
+    # B2. S_MAX sweep — the "improved B" group. The original B varied the
+    # smallest allowed cell (S_min), which had almost no effect because the
+    # budget is spent by the time cells reach size 4. B2 varies the LARGEST
+    # allowed cell instead: starting coarser leaves more budget headroom for
+    # deep splits, so finer cells actually appear (see the marginal-benefit
+    # analysis in docs/progress/Task3.md §5).
+    s_sets = [[1, 2, 4, 8, 16, 32],
+              [1, 2, 4, 8, 16, 32, 64],
+              [1, 2, 4, 8, 16, 32, 64, 128]]
+    for s_set in s_sets:
+        tag = s_set[-1]
+        c = Task3Config(name=f"smax_{tag}", group="B2_smax", S_set=s_set)
         configs.append(c)
 
     # C. Partition algorithm — use S_set=[4,8,16,32] so BOTH algorithms are
@@ -680,9 +697,14 @@ def main_func():
     parser.add_argument("--input", "-i", default=DEFAULT_INPUT)
     parser.add_argument("--out-root", "-o", default=DEFAULT_OUT_ROOT)
     parser.add_argument("--groups", nargs="+",
-                        choices=["A", "B", "C", "D", "E", "all"], default=["all"],
+                        choices=["A", "B", "B2", "C", "D", "E", "all"], default=["all"],
                         help="Which experiment groups to run (default: all).")
     args = parser.parse_args()
+
+    GROUP_KEYS = {
+        "A": "A_ksweep", "B": "B_sweep", "B2": "B2_smax",
+        "C": "C_algorithm", "D": "D_palette", "E": "E_priority",
+    }
 
     img = cv2.imread(args.input)
     if img is None:
@@ -691,7 +713,8 @@ def main_func():
 
     configs = build_experiment_grid(args.out_root)
     if "all" not in args.groups:
-        configs = [c for c in configs if c.group[0] in args.groups]
+        wanted = {GROUP_KEYS[g] for g in args.groups}
+        configs = [c for c in configs if c.group in wanted]
 
     all_metrics = []
     for cfg in configs:
