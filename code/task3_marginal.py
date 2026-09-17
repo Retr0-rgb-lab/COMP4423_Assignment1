@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from triangle_brick_task3 import _pad_to_max, _region_mse  # noqa
+from brick_geom import pad_to_max, _region_mse  # noqa
 
 DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jpg")
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "task3", "analysis")
@@ -39,7 +39,7 @@ def quadtree_with_history(img, S_set, max_triangles):
     Greedy priority = ΔSSE / 6 (higher first). Stops when the next split
     would exceed max_triangles (or heap empty).
     """
-    padded, orig_shape, _ = _pad_to_max(img, max(S_set))
+    padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
     Hp, Wp = padded.shape[:2]
 
