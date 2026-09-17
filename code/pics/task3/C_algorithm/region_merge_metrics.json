@@ -1,0 +1,38 @@
+{
+  "PSNR": 17.290724323309057,
+  "SSIM": 0.3320195774468477,
+  "MS-SSIM": 0.5221376892839265,
+  "Delta_E_2000": 9.59345654403815,
+  "Edge_F1": 0.2984160528537422,
+  "Edge_Precision": 0.23246124946216248,
+  "Edge_Recall": 0.41662151912449885,
+  "EPI": 0.019473817558854564,
+  "Quant_Error": 6.470917145318197,
+  "Budget_Util": 0.999,
+  "N_Triangles": 9990.0,
+  "FPS": 0.07477126402392165,
+  "N_Cells": 4995.0,
+  "Palette_Util": 1.0,
+  "K": 8.0,
+  "S_set": [
+    4,
+    8,
+    16,
+    32
+  ],
+  "partition": "region_merge",
+  "priority": "mse",
+  "palette_method": "kmeans_lab",
+  "counts_per_K": [
+    2310,
+    1380,
+    1415,
+    471,
+    1507,
+    280,
+    2019,
+    608
+  ],
+  "group": "C_algorithm",
+  "name": "region_merge"
+}

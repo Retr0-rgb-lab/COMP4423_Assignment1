@@ -123,36 +123,81 @@ def _region_sobel_var(region):
 
 
 def quadtree_partition(img, cfg: Task3Config):
-    """Top-down quadtree + greedy priority queue.
+    """Top-down quadtree + greedy priority queue (RDO).
 
-    On the assignment budget (10000 triangles) and a 1706x1279 image, the
-    starting grid at S_max already meets the budget if S_set contains a large
-    enough value (e.g., S_max=32 -> 4240 triangles on this image). When
-    S_max is too small (e.g., {1,2,4,8} -> 68480 triangles), we fall back to
-    region_merge_partition, which can start from S_min and merge upward.
+    Start at the COARSEST grid (S_max, fewest triangles), then repeatedly
+    split the highest-priority leaf while the budget still has room
+    (n_tri + 6 <= budget). Splitting is how cell sizes become adaptive: the
+    biggest MSE-reduction cells (edges / texture) get subdivided first, flat
+    cells stay coarse.
+
+    If the starting grid already EXCEEDS the budget (S_max too small for the
+    image size), top-down cannot help — splitting only increases the count.
+    In that regime we fall back to region_merge (bottom-up).
     """
     padded, orig_shape, _pad = _pad_to_max(img, max(cfg.S_set))
     S_max = max(cfg.S_set)
+    S_min = min(cfg.S_set)
     Hp, Wp = padded.shape[:2]
+    t0 = time.time()
 
-    # All leaves at S_max
+    # All leaves at S_max (coarsest grid)
     leaves = {}
     for i in range(Hp // S_max):
         for j in range(Wp // S_max):
             x, y = j * S_max, i * S_max
             region = padded[y:y + S_max, x:x + S_max]
             leaves[(x, y, S_max)] = _region_mse(region)
-
     n_tri = len(leaves) * 2
-    if n_tri <= N_TRI_BUDGET:
-        print(f"    [qt] S_max={S_max} starting grid fits: {n_tri} triangles, "
-              f"budget {N_TRI_BUDGET}")
-        return list(leaves.keys()), padded.shape[:2], orig_shape
+    print(f"    [qt] start S_max={S_max}: {len(leaves)} cells, {n_tri} triangles "
+          f"(budget {N_TRI_BUDGET}) ({time.time()-t0:.2f}s)")
 
-    # S_max too small for the budget — fall back to bottom-up merging.
-    print(f"    [qt] S_max={S_max} too dense ({n_tri} > {N_TRI_BUDGET}); "
-          f"falling back to region_merge")
-    return region_merge_partition(img, cfg)
+    # Starting grid over budget -> top-down cannot reduce; use region merge.
+    if n_tri > N_TRI_BUDGET:
+        print(f"    [qt] starting grid over budget; falling back to region_merge")
+        return region_merge_partition(img, cfg)
+
+    # Priority queue of split candidates (higher priority first via negation)
+    heap = []
+    for leaf in leaves:
+        p = _quadtree_priority(padded, leaf, cfg.priority)
+        heapq.heappush(heap, (-p, leaf))
+
+    iters = 0
+    # KEY FIX: keep splitting WHILE there is room in the budget.
+    # (Previous bug: `n_tri > budget` -> never split when under budget.)
+    while heap and n_tri + 6 <= N_TRI_BUDGET:
+        neg_p, leaf = heapq.heappop(heap)
+        if -neg_p <= 0:
+            break  # no more useful splits
+        x, y, size = leaf
+        if size <= S_min:
+            continue  # already at smallest allowed size
+        if leaf not in leaves:
+            continue  # stale entry (parent was merged/split earlier)
+        half = size // 2
+        children = [
+            (x, y, half),
+            (x + half, y, half),
+            (x, y + half, half),
+            (x + half, y + half, half),
+        ]
+        del leaves[leaf]
+        n_tri += 6  # 1 cell (2 tri) -> 4 cells (8 tri)
+        for c in children:
+            cx, cy, cs = c
+            region = padded[cy:cy + cs, cx:cx + cs]
+            leaves[c] = _region_mse(region)
+            p = _quadtree_priority(padded, c, cfg.priority)
+            heapq.heappush(heap, (-p, c))
+        iters += 1
+        if iters % 500 == 0:
+            print(f"    [qt] splits={iters} n_tri={n_tri} cells={len(leaves)} "
+                  f"heap={len(heap)} ({time.time()-t0:.2f}s)")
+
+    print(f"    [qt] done: splits={iters}, n_tri={n_tri}, cells={len(leaves)} "
+          f"({time.time()-t0:.2f}s)")
+    return list(leaves.keys()), padded.shape[:2], orig_shape
 
 
 def _quadtree_priority(img, leaf, priority):
@@ -226,26 +271,28 @@ def region_merge_partition(img, cfg: Task3Config):
     # Multi-scale: process each target size in ascending order.
     target_size = 2 * S_min
     while target_size <= S_max and n_tri > N_TRI_BUDGET:
-        # Gather all valid candidates at this size level (parent size = target_size,
-        # 4 children of size target_size/2).
+        # Candidates MUST be aligned to the target_size grid (top-left at a
+        # multiple of target_size), otherwise the merged cells are misaligned
+        # and can never form the next level's 2x2 blocks. With alignment, the
+        # merge tiling is complete: (Hp/target_size)*(Wp/target_size) blocks of
+        # 4 children exactly cover all (target_size/2)-cells.
         heap = []
         half = target_size // 2
-        for i in range(0, Hp - target_size + 1, half):
-            for j in range(0, Wp - target_size + 1, half):
-                children = [(j * half, i * half, half),
-                            ((j + 1) * half, i * half, half),
-                            (j * half, (i + 1) * half, half),
-                            ((j + 1) * half, (i + 1) * half, half)]
+        for i in range(0, Hp - target_size + 1, target_size):
+            for j in range(0, Wp - target_size + 1, target_size):
+                X, Y = j, i   # j/i are already pixel positions (step=target_size)
+                children = [(X, Y, half), (X + half, Y, half),
+                            (X, Y + half, half), (X + half, Y + half, half)]
                 if not all(c in leaves for c in children):
                     continue
-                if (j * half, i * half, target_size) in leaves:
+                if (X, Y, target_size) in leaves:
                     continue
-                _, sse_p = rect_sse(j * half, i * half, target_size, target_size)
+                _, sse_p = rect_sse(X, Y, target_size, target_size)
                 sse_c = leaves[children[0]] + leaves[children[1]] \
                       + leaves[children[2]] + leaves[children[3]]
                 # Per-triangle SSE reduction; negate so heapq.min pops largest first.
                 cost = -float((sse_c - sse_p).sum() / 6.0)
-                heapq.heappush(heap, (cost, j * half, i * half, target_size))
+                heapq.heappush(heap, (cost, X, Y, target_size))
         print(f"    [rm] size={target_size}: {len(heap)} candidates "
               f"({time.time()-t0:.2f}s)")
 
@@ -536,9 +583,12 @@ def build_experiment_grid(out_root):
         c = Task3Config(name=f"s_{tag}", group="B_sweep", S_set=s_set)
         configs.append(c)
 
-    # C. Partition algorithm
+    # C. Partition algorithm — use S_set=[4,8,16,32] so BOTH algorithms are
+    # feasible: quadtree starts at 32 and splits down to 4; region_merge starts
+    # at 4 and merges up to 32. (With S_min=1, region_merge is too slow.)
     for p in ["quadtree", "region_merge"]:
-        c = Task3Config(name=p, group="C_algorithm", partition=p)
+        c = Task3Config(name=p, group="C_algorithm", partition=p,
+                        S_set=[4, 8, 16, 32])
         configs.append(c)
 
     # D. Palette method
