@@ -152,7 +152,112 @@ Full table: `code/pics/task3/summary/metrics_table.csv`.
   whose boundaries still don't align with real edges (they just multiply
   small cells). This is a genuinely counterintuitive result for Task 5.
 
-## 5. Code
+## 5. Research log: B-group anomaly → marginal-benefit analysis
+
+This section records *how* the investigation unfolded after the 12-run grid
+was first produced, and why we ended up doing a separate marginal-benefit
+study. It is the chain of reasoning, not just the result.
+
+### 5.1 Step 1 — the B-group anomaly (observed after the 5-group grid)
+
+After running groups A/B/C/D/E, the B group (S_min sweep) looked suspicious:
+the **S_min = 2 and S_min = 4 runs had identical metrics**, and their
+geometry was bit-identical. Re-running the partition over all four S sets
+reproduced:
+
+| S_set | final size distribution | min size reached |
+|---|---|---|
+| [1, 2, 4, 8, 16, 32] | {4:724, 8:1479, 16:981, 32:1811} | 4 |
+| [2, 4, 8, 16, 32] | {4:724, 8:1479, 16:981, 32:1811} | 4 |
+| [4, 8, 16, 32] | {4:724, 8:1479, 16:981, 32:1811} | 4 |
+| [8, 16, 32] | {8:2148, 16:1095, 32:1752} | 8 |
+
+**Diagnosis.** The budget binds at size 4. The quadtree only has room for
+945 splits; by the time every worthwhile size-4 cell has been considered,
+the 9990-triangle budget is spent. So the minimum allowed size below 4 is
+never exercised. Only S_min = 8 changes the result — not because 8 is
+special, but because it *forbids* size-4 cells, forcing the budget up into
+larger cells.
+
+**Consequence for the experiment design.** The B group as originally
+specified only has one meaningful comparison (S_min=8 vs the rest); the
+"1 vs 2 vs 4" distinction is a no-op on this image. This is recorded here
+because it is a real experiment-design flaw to discuss in Task 5.
+
+### 5.2 Step 2 — does raising S_max give the smaller sizes room? (yes)
+
+The natural follow-up: if the problem is that the starting grid is too
+dense (4320 triangles at S_max=32), then a **larger S_max** would start
+coarser and leave more budget for fine splits. Tested S_max ∈ {32, 64, 128}:
+
+| S_max | starting cells | starting triangles | min size actually reached |
+|---|---|---|---|
+| 32 | 2160 | 4320 | 4 |
+| **64** | **540** | **1080** | **2** |
+| 128 | 140 | 280 | 2 |
+
+**Confirmed.** With S_max = 64 the quadtree reaches size 2 for the first
+time. The mechanism is exactly the one hypothesised: a coarser starting
+grid consumes less of the triangle budget, so there is more left for
+subdivision. (This is the author's intuition, verified empirically.)
+
+### 5.3 Step 3 — the marginal-benefit question
+
+Raising S_max raised a deeper question, posed by the author:
+
+> Merging 4 medium cells into 1 large cell saves 6 triangles. Spending those
+> 6 triangles on finer detail elsewhere — what is the *net* benefit? At what
+> cell size does splitting stop being worth it?
+
+This is a rate-distortion question, and it can be answered directly from the
+quadtree's own priority values. `code/task3_marginal.py` runs the quadtree
+with a very large budget (60000 triangles) and records, for every split, its
+**marginal benefit** = ΔSSE / 6 (error reduction per new triangle) and the
+parent cell size.
+
+Results (S_set=[1..64], 9820 splits):
+
+| parent size split | # splits | mean ΔSSE per new triangle | total ΔSSE | share of total benefit |
+|---|---|---|---|---|
+| 64 | 484 | **345,760** | 1,004M | **39.3%** |
+| 32 | 972 | 111,064 | 648M | 25.4% |
+| 16 | 1766 | 39,219 | 416M | 16.3% |
+| 8 | 2964 | 16,889 | 300M | 11.8% |
+| 4 | 3277 | 8,833 | 174M | 6.8% |
+| **2** | 357 | **5,071** | 11M | **0.4%** |
+
+**Findings.**
+
+- Splitting a 64-cell is worth **~68×** more than splitting a 2-cell, per
+  triangle spent. The marginal benefit decays steeply with size.
+- **All size-2 splits together contribute only 0.4%** of the total error
+  reduction. Exploiting the smallest allowed size is close to pointless on
+  this image *in MSE terms*.
+- The marginal-benefit curve (greedy order) decays from ~3×10⁶ to ~5×10³
+  over 60000 triangles. The assignment budget (9990) cuts the curve at
+  ~7×10⁴ — i.e. beyond the budget there is still worthwhile gain, but it
+  requires ever-smaller cells.
+
+**Artifacts.** `code/pics/task3/analysis/`:
+- `marginal_benefit_curve.png` — ΔSSE/tri vs triangles, log scale, with the
+  9990 budget marked.
+- `cumulative_benefit_curve.png` — cumulative error reduction (diminishing
+  returns).
+- `benefit_by_size.png` — mean marginal benefit grouped by parent size.
+
+### 5.4 Open issue this exposes
+
+The marginal-benefit analysis is in **SSE (pixel error)**, not perceptual
+error. A tiny cell at a sharp corner or thin line can have small SSE yet be
+perceptually important. The E-group experiment (Sobel/edge-density priority)
+was an attempt to allocate budget by perceived importance, and it *lost* to
+plain ΔMSE on every metric — evidence that naive edge-density allocation is
+not the answer either. A perceptual objective for budget allocation remains
+open (candidate for Task 4 real-time / Task 5 future work).
+
+---
+
+## 6. Code
 
 - `code/triangle_brick_task3.py`
   - `quadtree_partition(img, cfg)` — top-down RDO quadtree (fixed loop).
@@ -162,8 +267,10 @@ Full table: `code/pics/task3/summary/metrics_table.csv`.
   - `leaves_to_triangles / triangle_means_bgr / render_triangles`.
   - Reuses Task 2's `compute_metrics` (9-metric suite).
   - `plot_size_histogram / plot_palette / build_summary`.
+- `code/task3_marginal.py` — marginal-benefit / rate-distortion analysis
+  (records split history, produces the three analysis plots).
 
-## 6. Verification
+## 7. Verification
 
 ```bash
 cd "D:\Program Files\learn_torch\python-cv\Assignment1"
@@ -175,7 +282,7 @@ and `code/pics/task3/summary/` (CSV + bar chart). Per-run files:
 `<name>.png` (render), `<name>_size_hist.png`, `<name>_palette.png`,
 `<name>_metrics.json`.
 
-## 7. Known limitations / TODOs
+## 8. Known limitations / TODOs
 
 - **PSNR/ΔE slightly worse than the non-splitting version** — expected: the
   adaptive tiling trades pixel fidelity for edge alignment. Report should
