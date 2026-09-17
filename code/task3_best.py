@@ -1,17 +1,26 @@
 """
-Task 3: produce the "best" configuration image, given the analysis conclusions.
+Task 3: THE chosen best configuration + comparison renders.
 
-Chosen from the experiment grid + the perceptual/structure analysis:
-    K        = 16            (best ΔE2000 + quant error; A_ksweep)
-    S_max    = 32            (best perceptual colour; B2_smax vs 64)
-    priority = mse           (ΔMSE beats Sobel; E_priority)
-    palette  = kmeans_lab    (better ΔE than median_cut; D_palette)
-    partition= quadtree vs region_merge  (compared here; region_merge wins ΔE
-                                          but loses structure)
+Chosen configuration (balanced, not pure-ΔE):
 
-cv2.setRNGSeed is called so the K-Means palette is reproducible.
+    partition = quadtree          balanced: near-best ΔE with much better
+                                  structure than region_merge (which merges
+                                  away all fine cells)
+    S_max     = 32                best perceptual colour (B2_smax sweep)
+    S_min     = 1                 quadtree can reach fine cells where needed
+    K         = 16                best ΔE2000 + quant error (A_ksweep)
+    priority  = mse (ΔMSE / 6)    beats Sobel priority (E_priority)
+    palette   = kmeans_lab        better ΔE than median_cut (D_palette)
 
-Output: code/pics/task3/best/best_config.png and best_compare.png
+cv2.setRNGSeed(0) makes the K-Means palette reproducible.
+
+Why quadtree over region_merge (which had the single lowest ΔE, 8.63):
+    region_merge collapses all cells to size {16, 32} — it drops every fine
+    cell, so Edge F1 / EPI are the worst of the grid (0.298 / +0.015).
+    quadtree keeps a {4, 8, 16, 32} mix: ΔE 9.03 (only 0.4 worse) but
+    Edge F1 0.339 and EPI +0.047 (much better structure).
+
+Output: code/pics/task3/best/best_config.png + best_compare.png
 """
 import os
 import sys
@@ -30,9 +39,11 @@ DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics",
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "task3", "best")
 BUDGET = 9990
 
-CANDIDATES = [
-    # name, partition, S_set, K, palette_method
-    ("quadtree_smax32_k16_lab", "quadtree", [1, 2, 4, 8, 16, 32], 16, "kmeans_lab"),
+# The chosen configuration.
+BEST = ("quadtree_smax32_k16_lab", "quadtree", [1, 2, 4, 8, 16, 32], 16, "kmeans_lab")
+
+# Kept for the comparison figure (region_merge had lower ΔE but worse structure).
+OTHERS = [
     ("region_merge_smax32_k16_lab", "region_merge", [4, 8, 16, 32], 16, "kmeans_lab"),
     ("region_merge_smax32_k16_median", "region_merge", [4, 8, 16, 32], 16, "median_cut"),
 ]
@@ -58,27 +69,32 @@ def run(img, partition, s_set, k, palette_method):
     return canvas, m, sizes
 
 
+def report(name, m, sizes):
+    print(f"{name:32s} n_tri={m['N_Triangles']:.0f} "
+          f"SSIM={m['SSIM']:.4f} PSNR={m['PSNR']:.2f} "
+          f"dE={m['Delta_E_2000']:.3f} EdgeF1={m['Edge_F1']:.4f} "
+          f"EPI={m['EPI']:+.4f}  sizes={dict(sorted(sizes.items()))}")
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
-    cv2.setRNGSeed(0)  # reproducible K-Means
     img = cv2.imread(DEFAULT_INPUT)
 
     results = []
-    for name, partition, s_set, k, pm in CANDIDATES:
-        cv2.setRNGSeed(0)
+    best_canvas = None
+    for name, partition, s_set, k, pm in [BEST] + OTHERS:
+        cv2.setRNGSeed(0)  # reproducible K-Means
         canvas, m, sizes = run(img, partition, s_set, k, pm)
+        report(name, m, sizes)
         results.append((name, canvas, m, sizes))
-        print(f"{name:32s} n_tri={m['N_Triangles']:.0f} "
-              f"SSIM={m['SSIM']:.4f} PSNR={m['PSNR']:.2f} "
-              f"dE={m['Delta_E_2000']:.3f} EdgeF1={m['Edge_F1']:.4f} "
-              f"EPI={m['EPI']:+.4f}  sizes={dict(sorted(sizes.items()))}")
         cv2.imwrite(os.path.join(OUT_DIR, f"{name}.png"), canvas)
+        if name == BEST[0]:
+            best_canvas = canvas
 
-    # Pick the best by ΔE2000 (the perceptual-colour objective)
-    best = min(results, key=lambda r: r[2]["Delta_E_2000"])
-    print(f"\n[best] by ΔE2000: {best[0]}")
+    cv2.imwrite(os.path.join(OUT_DIR, "best_config.png"), best_canvas)
+    print(f"\n[best] chosen config = {BEST[0]}  -> {OUT_DIR}/best_config.png")
 
-    # Compare grid: original + the three candidates
+    # Compare grid: original + the three renders
     H, W = img.shape[:2]
     pad, label_h = 16, 40
     cell_h = H + label_h
@@ -96,7 +112,6 @@ def main():
     cmp_path = os.path.join(OUT_DIR, "best_compare.png")
     cv2.imwrite(cmp_path, grid)
     print(f"[best] compare grid: {cmp_path}")
-    print(f"[best] per-candidate renders in {OUT_DIR}")
 
 
 if __name__ == "__main__":

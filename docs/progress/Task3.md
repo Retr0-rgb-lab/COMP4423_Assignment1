@@ -484,3 +484,41 @@ measured values.
 **Candidate fixes (not yet implemented).** Replace the ΔMSE priority with a
 perceptual objective — ΔE2000, Δ(1−SSIM), or a multi-scale term — so that
 large-area colour drift enters the optimisation instead of being ignored.
+
+---
+
+## 10. Best configuration (final choice)
+
+Chosen for a **balanced** result — near-best perceptual colour without
+throwing away structure:
+
+| setting | value | why |
+|---|---|---|
+| partition | **quadtree** | keeps a {4,8,16,32} mix; near-best ΔE with much better structure than region_merge (which merges all fine cells away) |
+| S_max | **32** | best ΔE2000 (B2_smax sweep); 64 improves structure but worsens large-area colour |
+| S_min | 1 | lets the quadtree reach fine cells where the budget allows |
+| K | **16** | best ΔE2000 + quant error (A_ksweep) |
+| priority | **mse** (ΔMSE / 6) | beats Sobel priority on every metric (E_priority) |
+| palette | **kmeans_lab** | better ΔE than median_cut (D_palette); seeded for reproducibility |
+
+Metrics (9990 triangles, `sky.jpg`):
+
+| config | ΔE2000 | SSIM | PSNR | Edge F1 | EPI |
+|---|---|---|---|---|---|
+| **quadtree S_max=32 K=16 kmeans_lab (chosen)** | 9.03 | **0.359** | 17.55 | **0.339** | **+0.047** |
+| region_merge S_max=32 K=16 kmeans_lab | **8.63** | 0.339 | 17.59 | 0.298 | +0.015 |
+| region_merge S_max=32 K=16 median_cut | 9.47 | 0.338 | 17.54 | 0.336 | +0.016 |
+
+**Why quadtree, not region_merge**, even though region_merge has the single
+lowest ΔE (8.63): region_merge merges *all* fine cells away — its final sizes
+are only {16, 32} — so it has the **worst structure** of the grid (Edge F1
+0.298, EPI +0.015). The quadtree version keeps a {4, 8, 16, 32} mix and costs
+only +0.4 ΔE for a much better structure score. Better balanced.
+
+**Caveat (unchanged).** "Best" is still objective-dependent. This config
+leans perceptual. If structure/edges matter more, S_max=64 wins (Edge F1 0.40,
+EPI +0.11) at ΔE ≈ 11.8 — see §9.5. There is no single config that wins both.
+
+**Artifacts**: `code/pics/task3/best/best_config.png` (the render),
+`best_compare.png` (vs the region_merge variants), reproducible via
+`code/task3_best.py` (calls `cv2.setRNGSeed(0)` so the palette is stable).
