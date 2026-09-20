@@ -45,8 +45,10 @@ from brick_geom import pad_to_max, leaves_to_triangles, MAX_TRIANGLES  # noqa: E
 from brick_quadtree import quadtree_partition  # noqa: E402
 from brick_region_merge import region_merge_partition  # noqa: E402
 from brick_color import build_palette, quantize_nearest_bgr  # noqa: E402
-from brick_render import triangle_means_bgr, render_triangles  # noqa: E402
-from brick_io import save_png, StageTimer, print_stage_summary  # noqa: E402
+from brick_render import render_triangles  # noqa: E402
+from brick_means import extract_means, METHODS as MEANS_METHODS  # noqa: E402
+from brick_io import (save_png, StageTimer, print_stage_summary,
+                     open_camera)  # noqa: E402
 from brick_display import (make_side_by_side, composite_size, draw_hud,
                            window_closed)  # noqa: E402
 
@@ -81,6 +83,10 @@ class FrameConfig:
                  in the report.
       scale    : float -- resize factor applied to the camera frame before
                  processing. 1.0 = process at native resolution.
+      means    : "mask" | "fast" | "sample" -- colour extraction method. "mask"
+                 is the slow shipped reference (it also averages a fringe of
+                 neighbouring pixels); "fast" is exact over the triangle's own
+                 pixels; "sample" approximates. See brick_means for measurements.
       partition/priority/palette_method : names dispatched inside the engine
                  modules; an unknown value raises there rather than silently
                  falling back (see brick_quadtree / brick_color).
@@ -90,6 +96,8 @@ class FrameConfig:
     K: int = 16
     budget: int = N_TRI_BUDGET
     scale: float = 1.0
+    means: str = "fast"
+    n_samples: int = 9
     partition: str = "quadtree"
     priority: str = "mse"
     palette_method: str = "kmeans_lab"
@@ -113,31 +121,6 @@ def powers_of_two_upto(smax, smin=1):
         out.append(s)
         s *= 2
     return out
-
-
-def open_camera(index, width=None, height=None):
-    """Open camera `index`, optionally forcing the capture resolution.
-
-    Function: `cv2.VideoCapture` with the DirectShow backend on Windows (MSMF
-    often refuses to apply a requested size on laptops). Raises rather than
-    returning a closed handle, so a busy or absent device fails loudly.
-
-    Shape: returns a `cv2.VideoCapture` whose frames are (H, W, 3) uint8 BGR.
-    Semantics: `width`/`height`, when given, are REQUESTS -- the driver may
-    ignore them, so the caller must read back the actual size from the frames
-    instead of assuming.
-    """
-    backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
-    cap = cv2.VideoCapture(index, backend)
-    if not cap.isOpened():
-        raise RuntimeError(
-            f"Cannot open camera index {index}. Try another --camera N, or close "
-            f"the app that is holding the device.")
-    if width:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    if height:
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    return cap
 
 
 def render_frame(frame, cfg, timer):
@@ -187,7 +170,7 @@ def render_frame(frame, cfg, timer):
         padded, _, _ = pad_to_max(frame, max(cfg.S_set))
 
     with timer.stage("means"):
-        means = triangle_means_bgr(padded, triangles)
+        means = extract_means(padded, leaves, cfg.means, cfg.n_samples)
 
     with timer.stage("palette"):
         palette = build_palette(means, cfg.K, cfg.palette_method)
@@ -246,6 +229,10 @@ def main():
     p.add_argument("--smax", type=int, default=32, help="largest brick side")
     p.add_argument("--smin", type=int, default=1, help="smallest brick side")
     p.add_argument("--k", type=int, default=pre["k"], help="palette size (>3)")
+    p.add_argument("--means", choices=list(MEANS_METHODS), default="fast",
+                   help="per-triangle colour method; 'mask' is the slow shipped")
+    p.add_argument("--n-samples", type=int, default=9,
+                   help="interior points per triangle when --means sample")
     p.add_argument("--partition", choices=["quadtree", "region_merge"],
                    default="quadtree")
     p.add_argument("--priority", choices=["mse", "edgef1"], default="mse")
@@ -271,13 +258,14 @@ def main():
 
     cfg = FrameConfig(
         S_set=powers_of_two_upto(args.smax, args.smin),
-        K=args.k, budget=args.budget, scale=args.scale,
-        partition=args.partition, priority=args.priority,
-        palette_method=args.palette_method,
+        K=args.k, budget=args.budget, scale=args.scale, means=args.means,
+        n_samples=args.n_samples, partition=args.partition,
+        priority=args.priority, palette_method=args.palette_method,
     )
 
     print(f"[task4] S_set={cfg.S_set} K={cfg.K} partition={cfg.partition} "
-          f"priority={cfg.priority} palette={cfg.palette_method}")
+          f"priority={cfg.priority} palette={cfg.palette_method} "
+          f"means={cfg.means}")
     cap = open_camera(args.camera, args.width, args.height)
     ok, frame = cap.read()
     if not ok or frame is None:

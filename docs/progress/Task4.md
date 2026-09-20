@@ -268,6 +268,68 @@ full size. `watch` now keeps `scale 1.0` and lowers only the budget:
 So the default is now a ~4× larger picture for ~25% less frame rate than the
 previous `watch`, and both presets render at the camera's native 640×480.
 
+## Level 3, step 1: the mean-colour stage (`brick_means.py`)
+
+### A defect found in the shipped pipeline, not just a speed problem
+
+`brick_render.triangle_means_bgr` builds each triangle's mask with
+`cv2.fillPoly`. For a polygon whose edges lie exactly on integer pixel boundaries,
+`fillPoly` paints an extra one-pixel fringe along the RIGHT and BOTTOM edges --
+pixels whose centres are outside the polygon, i.e. pixels belonging to the
+neighbouring cell. The reference then averages that inflated set, so **every
+brick's colour in Tasks 2 and 3 is contaminated by its bottom-right neighbours**,
+with a fixed directional bias. Measured per cell, both halves:
+
+| cell size | own pixels | `fillPoly` claims | leaked | leak as % of own |
+|---|---|---|---|---|
+| 1 | 1 | 6 | 4 | 400% |
+| 2 | 4 | 12 | 6 | 150% |
+| 4 | 16 | 30 | 10 | 62% |
+| 8 | 64 | 90 | 18 | 28% |
+| 16 | 256 | 306 | 34 | 13% |
+| 32 | 1024 | 1122 | 66 | 6% |
+
+Over a real partition this comes to **+20% extra pixels at 9990 triangles** (67610
+foreign pixels against 332909 own), and it is worst exactly where it matters: the
+Task 3 size distribution is dominated by sizes 2 and 4 ({2: 1489, 4: 1853} of 4995
+cells). The PDF asks for each brick's colour to be taken "from its own image
+region", so the analytic in-cell partition is the faithful reading and the
+reference is the defective one.
+
+The reference is deliberately NOT changed: every recorded Task 2/3 number depends
+on it. The corrected implementation lives in `brick_means.py` and the difference is
+quantified below, so this reads as a finding with evidence rather than as a silent
+rewrite of the earlier results.
+
+### Three implementations, measured
+
+640×480, 9990 triangles, same camera frame, 5-frame runs, through the app's own
+benchmark mode:
+
+| `--means` | frame FPS | `means` stage | whole frame | ΔE2000 vs source | PSNR vs source |
+|---|---|---|---|---|---|
+| `mask` (shipped) | 0.41 | 1716 ms | 2260 ms | 9.947 | 14.90 dB |
+| **`fast`** (exact in-cell) | **1.35** | **20.8 ms** | **532 ms** | **8.633** | **15.33 dB** |
+| `sample` (9 interior pts) | 1.47 | 5.2 ms | 493 ms | 10.244 | 14.87 dB |
+
+Two things to take from this, and the second is the surprising one:
+
+1. `fast` removes the contamination **and** is 82× faster on that stage: 3.3×
+   overall frame rate, ΔE 9.95 → 8.63 (**13% closer to the source**). 77.5% of
+   output pixels change, so the defect was not a corner case.
+2. `sample` is the fastest but is **less faithful than the defective reference**
+   (ΔE 10.24). With 9990 triangles many bricks are 1–4 px, where a handful of
+   interior samples simply has nothing to average. It is a real trade-off, not a
+   free win, and it is only worth taking when frame rate outranks fidelity.
+
+Note the per-stage numbers now: `means` fell from 1716 ms to 21 ms, so
+**`quadtree_partition` is the bottleneck again at ~436 ms of the 532 ms frame**
+(82%). It has the same defect shape as the old `means` -- a numpy region mean
+recomputed for every split candidate -- and `brick_region_merge.rect_sse` already
+solves that with O(1) summed-area lookups. That is the next step.
+
+Artifacts: `pics/task4/L3_means/{mask,fast,sample}/frame0001_{input,render,compare}.png`.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.

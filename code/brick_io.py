@@ -1,8 +1,7 @@
 """
-brick_io -- file output and stage timing shared by the drivers.
+brick_io -- camera input, file output and stage timing shared by the drivers.
 
-Two small concerns that more than one driver needs and that no engine module
-owns:
+Three small concerns that drivers need and that no engine module owns:
 
   * `save_png`   -- `cv2.imwrite` that creates the parent directory and RAISES
                     on failure, because OpenCV reports failure by return value
@@ -10,6 +9,8 @@ owns:
   * `StageTimer` -- per-stage wall-clock accumulation inside a per-frame loop,
                     so the live HUD, the headless benchmark and the Task 4
                     before/after table are all the SAME measurement.
+  * `open_camera` -- opening the webcam, which is plumbing rather than a driver
+                    decision, so it lives here instead of in the camera driver.
 
 Why a module: `save_png` was written for the Task 2 driver, and Task 4 needs it
 too. Copying it would leave two versions of the "cv2 hides its failures" fix,
@@ -199,3 +200,28 @@ def print_stage_summary(timer, n_frames, wall_s, context=None):
     print(f"  {'TOTAL':<12s} {'':>5s} "
           f"{rep['__total__']['median_ms']:10.1f} "
           f"{rep['__total__']['mean_ms']:10.1f}   (excludes camera read)")
+
+
+def open_camera(index, width=None, height=None):
+    """Open camera `index`, optionally forcing the capture resolution.
+
+    Function: `cv2.VideoCapture` with the DirectShow backend on Windows (MSMF
+    often refuses to apply a requested size on laptops). Raises rather than
+    returning a closed handle, so a busy or absent device fails loudly.
+
+    Shape: returns a `cv2.VideoCapture` whose frames are (H, W, 3) uint8 BGR.
+    Semantics: `width`/`height`, when given, are REQUESTS -- the driver may
+    ignore them, so the caller must read back the actual size from the frames
+    instead of assuming.
+    """
+    backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+    cap = cv2.VideoCapture(index, backend)
+    if not cap.isOpened():
+        raise RuntimeError(
+            f"Cannot open camera index {index}. Try another --camera N, or close "
+            f"the app that is holding the device.")
+    if width:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    if height:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    return cap
