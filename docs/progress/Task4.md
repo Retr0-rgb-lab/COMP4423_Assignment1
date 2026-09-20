@@ -439,6 +439,36 @@ load.
 Artifacts: none yet for this step -- the partition change is geometry-identical, so
 the `pics/task4/L3_means/` renders remain valid for it.
 
+### Regression check: does this change Task 3's results?
+
+`quadtree_partition` is what Task 3 calls, its signature changed, and its default
+implementation changed. So it was re-run and compared against the recorded
+artifacts, and the comparison is more interesting than a yes/no:
+
+| Field (Task 3 A-group re-run vs recorded) | k04 | k08 | k16 |
+|---|---|---|---|
+| `N_Cells` | 4995 = 4995 | 4995 = 4995 | 4995 = 4995 |
+| `N_Triangles` | 9990 = 9990 | 9990 = 9990 | 9990 = 9990 |
+| `counts_per_K` | **differs** | **differs** | **differs** |
+| `Quant_Error` | 9.2489 → 9.2626 | 7.2185 → 7.2708 | 5.6189 → 5.7680 |
+
+The geometry is untouched -- same cell count, and the direct per-cell comparison
+above shows the same cell SET -- while the palette assignment counts differ. So the
+metric drift is entirely the **K-Means palette, which Task 3 cannot reproduce**:
+`triangle_brick_task3` never calls `cv2.setRNGSeed`, and `cv2.kmeans` draws from
+OpenCV's global RNG, so a re-run gets a different local optimum.
+
+Two conclusions, and the second one matters for Task 5:
+
+1. This step does not invalidate any recorded Task 2/3 number. The artifacts were
+   restored with `git checkout` so the committed evidence still matches Task3.md.
+2. **The non-reproducibility recorded earlier as a live-loop flicker problem is not
+   a live-loop problem.** It is a general defect of the offline pipeline too: two
+   runs of the same Task 3 experiment on the same image do not agree. That is worth
+   stating plainly in the report's limitations, with the numbers above as evidence,
+   because it means the Task 3 sweep's *comparisons* are still meaningful (every run
+   is affected the same way) while its exact decimal values are not reproducible.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
