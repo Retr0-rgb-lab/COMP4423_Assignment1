@@ -74,13 +74,13 @@ Single method (default = otsu):
 
 ```bash
 cd "D:\Program Files\learn_torch\python-cv\Assignment1"
-..\venv\Scripts\python code\triangle_brick.py --input code\pics\sky.jpg --output code\pics\task2\out_task2.png --no-show
+..\..\venv\Scripts\python code\triangle_brick.py --input code\pics\sky.jpg --output code\pics\task2\out_task2.png --no-show
 ```
 
 Compare all three:
 
 ```bash
-..\venv\Scripts\python code\triangle_brick.py --input code\pics\sky.jpg --output code\pics\task2\out_task2.png --compare --no-show
+..\..\venv\Scripts\python code\triangle_brick.py --input code\pics\sky.jpg --output code\pics\task2\out_task2.png --compare --no-show
 ```
 
 Actual (`code/sky.jpg`, 1706×1279, after `--compare`):

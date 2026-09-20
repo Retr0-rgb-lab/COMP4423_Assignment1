@@ -315,7 +315,7 @@ open (candidate for Task 4 real-time / Task 5 future work).
 
 ```bash
 cd "D:\Program Files\learn_torch\python-cv\Assignment1"
-..\venv\Scripts\python code\triangle_brick_task3.py --groups A B C D E
+..\..\venv\Scripts\python code\triangle_brick_task3.py --groups A B C D E
 ```
 
 Outputs under `code/pics/task3/{A_ksweep,B_sweep,C_algorithm,D_palette,E_priority}/`

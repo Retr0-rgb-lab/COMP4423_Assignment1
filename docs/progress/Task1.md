@@ -22,14 +22,14 @@
 ## Problems and solutions
 
 - **WSL has no GUI**: `cv2.imshow` cannot pop a window in the current shell. Verification must run in a Windows terminal.
-- **OpenCV availability**: `../venv` already ships with `opencv-python 5.0.0.93`, no extra install needed.
+- **OpenCV availability**: the venv at `../../venv` (`learn_torch\venv`) already ships with `opencv-python 5.0.0.93`, no extra install needed. Note it is two levels up, not one: there is no `python-cv\venv`.
 
 ## Verification (run in Windows terminal)
 
 ```bash
 cd "D:\Program Files\learn_torch\python-cv\Assignment1"
-..\venv\Scripts\python code/capture.py                    # default (code/pics/sky.jpg)
-..\venv\Scripts\python code/capture.py code/pics/sky.jpg   # explicit arg
+..\..\venv\Scripts\python code/capture.py                    # default (code/pics/sky.jpg)
+..\..\venv\Scripts\python code/capture.py code/pics/sky.jpg   # explicit arg
 ```
 
 Expected:
