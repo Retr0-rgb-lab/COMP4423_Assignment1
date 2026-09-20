@@ -41,6 +41,7 @@ from brick_color import quantize_otsu, quantize_kmeans, quantize_fixed
 from brick_render import triangle_means_bgr, render_triangles
 from brick_metrics import compute_metrics
 from brick_viz import make_compare_grid, make_residual_panel, make_metrics_bar_chart
+from brick_io import save_png
 
 
 DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jpg")
@@ -49,32 +50,6 @@ DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics",
 # writes its companion files, so keep it a directory, not a bare filename.
 DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "pics", "task2", "out_task2.png")
-
-
-def save_png(path, img):
-    """Write `img` to `path` as PNG, creating the parent directory first.
-
-    Function
-    --------
-    Wraps `cv2.imwrite` because that call reports failure by RETURN VALUE, not by
-    exception: writing into a directory that does not exist returns False and
-    prints nothing, so a run can appear to succeed while producing no output.
-    That is easy to hit now that the default output lives in `pics/task2/`, which
-    may not exist on a fresh checkout. This raises instead.
-
-    Shape: `img` is (H, W, 3) uint8 BGR (any size); `path` is a str. Semantics:
-    nothing is transformed -- the array is encoded as-is, so a BGR array is
-    written as a BGR PNG (correct for OpenCV, and why nothing here converts
-    colour order).
-
-    Raises:
-      IOError -- when `cv2.imwrite` returns falsy: an unwritable directory, an
-      unknown extension, or a bad array dtype (e.g. float32, which OpenCV will
-      not encode as PNG).
-    """
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    if not cv2.imwrite(path, img):
-        raise IOError(f"cv2.imwrite failed for {path}")
 
 
 def preprocess(img):
