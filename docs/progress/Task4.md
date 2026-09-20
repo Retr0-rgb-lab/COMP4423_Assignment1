@@ -208,6 +208,37 @@ statistic to mean anything.** With n=2 a "median" is just a mean, and a single
 warm-up frame can masquerade as a persistent cost for any stage. All numbers in
 this file now come from ≥10-frame runs.
 
+##### Display: side-by-side, closed by the window's X
+
+The window shows both panes at once -- `a) camera input` left, `b) triangle
+bricks` right -- with the live statistics over the render pane. Showing the source
+beside the result is deliberate: a mosaic judged without its input says nothing
+about fidelity, and Task 4 asks for the "real-world" comparison.
+
+Closing is by the window's close button (X), not only by a keypress. OpenCV's
+HighGUI loop does not report a click on X -- the window is destroyed underneath
+the loop and `imshow` keeps drawing into nothing -- so `brick_display.window_closed`
+polls `WND_PROP_VISIBLE` each frame and treats a raised `cv2.error` as "gone" too.
+
+The composite is verified numerically rather than by eye (this session cannot
+display images), against `L1_baseline/frame0001_compare.png`:
+
+| Check | Result |
+|---|---|
+| composite shape | (506, 1286, 3) = (480+26 caption, 2*640+6 separator) |
+| left pane vs `frame0001_input.png` | byte-identical |
+| right pane vs `frame0001_render.png` | byte-identical |
+| separator band | uniform background |
+| caption strip | non-blank |
+
+##### Two presets, because the honest configuration is not watchable
+
+`--preset watch` (default) = scale 0.5 / 2000 bricks / K 8 -> a smooth preview.
+`--preset quality` = scale 1.0 / 9990 bricks / K 16 -> the full Task 3 config at
+~0.45 FPS, and the configuration all the baseline numbers above were measured at.
+An explicit flag overrides the preset. Named presets exist so that retuning a
+viewing default cannot silently move the baseline the report quotes.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.

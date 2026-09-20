@@ -5,31 +5,28 @@ PDF requirement: "Implement and test the program in a real-world scenario. Call
 the camera to capture images and successfully display their triangle-brick
 representations."
 
-Level 1 of Task 4 is: camera capture + display of the triangle-brick result. This
-driver does exactly that and nothing more, on purpose -- it is the honest
-baseline that the Level 4 before/after comparison is measured against, so it
-runs the FULL Task 3 pipeline on every frame with no caching and no
-approximation. Expect it to be slow (~0.45 FPS at 640x480, 9990 triangles); that
-slow number is the deliverable, not a bug.
+Level 1 is camera capture + display, and this driver does exactly that: the FULL
+Task 3 pipeline runs on every frame with no caching and no approximation, because
+it is the honest baseline the Level 4 before/after comparison is measured against.
+
+The window shows BOTH panes: `a) camera input` left, `b) triangle bricks` right,
+live statistics drawn over the render pane. Showing the source beside the result
+is the point -- a mosaic judged without its input says nothing about fidelity.
+Close it with the window's X (or q/ESC); X is detected via
+`brick_display.window_closed`.
 
 Per frame: read -> (resize) -> partition -> triangles -> means -> palette ->
-quantize -> render -> HUD. Each stage is timed with `brick_io.StageTimer` and the
-per-stage median is printed at exit, so the HUD and the report's before/after
-table come from ONE measurement path (see docs/progress/Task4.md).
+quantize -> render -> compose -> HUD. Stages are timed by `brick_io.StageTimer`
+and the medians are printed at exit, so HUD and report share one measurement path
+(see docs/progress/Task4.md).
 
-Defaults mirror the Task 3 "best config" (quadtree, S_max=32, K=16, kmeans_lab,
-Delta-MSE priority), so the report can say Task 4 drives the same pipeline from a
-camera instead of a file.
-
-Usage (Windows venv; WSL has no display, so use --no-show there):
-    python code\\camera_app.py                            # live window
-    python code\\camera_app.py --scale 0.5 --budget 3000
+Usage (Windows venv; WSL has no display, so add --no-show there):
+    python code\\camera_app.py --preset watch      # default, smooth preview
+    python code\\camera_app.py --preset quality    # full Task 3 config, ~0.45 FPS
     python code\\camera_app.py --no-show --max-frames 30   # benchmark
-Note: the built-in defaults are `__file__`-relative, but any path you PASS is
-resolved against the current directory. Run from the repo root and pass
-`code/pics/task4/...` to keep images where AGENTS 1.1 requires them.
-
-Keys: q or ESC quit, s snapshot, p pause, r reset the timer.
+Any path you PASS resolves against the current directory (the defaults do not), so
+run from the repo root and pass `code/pics/task4/...`. Keys: q/ESC quit,
+s snapshot, p pause, r reset.
 """
 import argparse
 import os
@@ -47,16 +44,21 @@ from brick_region_merge import region_merge_partition  # noqa: E402
 from brick_color import build_palette, quantize_nearest_bgr  # noqa: E402
 from brick_render import triangle_means_bgr, render_triangles  # noqa: E402
 from brick_io import save_png, StageTimer  # noqa: E402
+from brick_display import make_side_by_side, draw_hud, window_closed  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SNAPSHOT_DIR = os.path.join(HERE, "pics", "task4")
 N_TRI_BUDGET = 9990  # 10-triangle margin under the 10000 cap, same as Task 3
 WINDOW = "Task 4: triangle-brick camera"
 
-# BGR colours for the HUD; both are dark so white text stays readable over any
-# frame content (the mosaic can be any colour, including white).
-HUD_BG = (32, 32, 32)
-HUD_FG = (255, 255, 255)
+# `quality` is the config whose per-stage cost is recorded in
+# docs/progress/Task4.md; `watch` is the watchable one, reached purely by lowering
+# resolution and brick count. Named presets stop the report's baseline numbers
+# from drifting when a viewing default gets retuned.
+PRESETS = {
+    "watch": {"scale": 0.5, "budget": 2000, "k": 8},
+    "quality": {"scale": 1.0, "budget": N_TRI_BUDGET, "k": 16},
+}
 
 
 @dataclass
@@ -147,15 +149,24 @@ def render_frame(frame, cfg, timer):
     Intermediate: `padded` is (Hp, Wp, 3) reflect-padded to a multiple of
     `max(S_set)`; `means` is (T, 3) float32 with `[..., 0]=B`; `palette` is
     (K, 3) uint8 BGR; `labels` is (T,) uint8 indexing `palette`.
-    Output: `(canvas (H, W, 3) uint8 BGR, info dict)`. `info` carries the
-    per-frame statistics the HUD and the exit summary read: `n_tri`,
-    `n_cells`, `sizes` (cell side -> CELL count), `palette`, and `t_resize_ms`.
+    Output: `(canvas, processed, info)`.
+      canvas    : (H, W, 3) uint8 BGR -- the rendered mosaic, same size as the
+                  processed input (cropped back from the padded canvas).
+      processed : (H, W, 3) uint8 BGR -- the frame AFTER `--scale` resizing, i.e.
+                  exactly what the pipeline saw. The side-by-side view needs this
+                  rather than the raw camera frame: at `--scale 0.5` the raw frame
+                  is twice the size of the render, and pairing them would misalign
+                  the panes.
+      info      : per-frame statistics for the HUD and the exit summary --
+                  `n_tri`, `n_cells`, `sizes` (cell side -> CELL count),
+                  `palette`, and `t_resize_ms`.
     """
     t_resize = time.perf_counter()
     if cfg.scale != 1.0:
         frame = cv2.resize(frame, None, fx=cfg.scale, fy=cfg.scale,
                            interpolation=cv2.INTER_AREA)
     t_resize = (time.perf_counter() - t_resize) * 1000.0
+    processed = frame
 
     with timer.stage("partition"):
         if cfg.partition == "quadtree":
@@ -192,45 +203,7 @@ def render_frame(frame, cfg, timer):
         "palette": palette,
         "t_resize_ms": t_resize,
     }
-    return canvas, info
-
-
-def draw_hud(canvas, fps, info, cfg, paused, timer):
-    """Draw the FPS / config / per-stage HUD onto `canvas` in place.
-
-    Function: the HUD is how a real-time claim is verified on screen rather than
-    asserted. It shows the measured FPS and the median cost of each pipeline
-    stage so a viewer can see WHERE the time goes, not just that it is slow.
-
-    Shape: `canvas` is (H, W, 3) uint8 BGR, modified in place (no copy). The
-    panel height grows with the number of stage lines; it is drawn over the
-    top-left corner and short text is left-padded so nothing is clipped.
-    Semantics: `fps` is the caller's rolling estimate; `timer.report()` supplies
-    the stage medians, so the numbers shown match the exit summary exactly.
-    """
-    rep = timer.report()
-    lines = [
-        f"FPS {fps:5.1f}   {'PAUSED' if paused else 'live'}",
-        f"tris {info['n_tri']:5d}/{cfg.budget}   cells {info['n_cells']:5d}",
-        f"{cfg.partition} S_max={max(cfg.S_set)} K={cfg.K} "
-        f"{cfg.palette_method}",
-        "sizes " + " ".join(f"{s}:{n}" for s, n in sorted(info["sizes"].items())),
-        "--- median ms per stage ---",
-    ]
-    for name in ["partition", "triangles", "means", "palette", "quantize",
-                 "render"]:
-        if name in rep:
-            lines.append(f"  {name:<10s} {rep[name]['median_ms']:8.1f}")
-    lines.append(f"  {'frame':<10s} {rep['__total__']['median_ms']:8.1f}")
-
-    y = 22
-    for text in lines:
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(canvas, (6, y - th - 4), (14 + tw, y + 4), HUD_BG, -1)
-        cv2.putText(canvas, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    HUD_FG, 1, cv2.LINE_AA)
-        y += th + 9
-    return canvas
+    return canvas, processed, info
 
 
 def print_summary(timer, cfg, n_frames, wall_s):
@@ -273,17 +246,28 @@ def main():
     """
     p = argparse.ArgumentParser(
         description="Task 4: live camera -> triangle-brick display.")
+    # `--preset` supplies defaults for the flags below, so it must be read first.
+    # The throwaway parser peeks at argv; `parse_known_args` tolerates everything
+    # else, and an explicitly passed flag still overrides the preset default.
+    peek = argparse.ArgumentParser(add_help=False)
+    peek.add_argument("--preset", choices=list(PRESETS), default="watch")
+    preset_name = peek.parse_known_args()[0].preset
+    pre = PRESETS[preset_name]
+
+    p.add_argument("--preset", choices=list(PRESETS), default=preset_name,
+                   help="'watch' = smooth preview (reduced resolution and brick "
+                        "budget); 'quality' = the full Task 3 configuration, "
+                        "~0.45 FPS. Any explicit flag below overrides it.")
     p.add_argument("--camera", type=int, default=0, help="camera index")
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
-    p.add_argument("--scale", type=float, default=1.0,
+    p.add_argument("--scale", type=float, default=pre["scale"],
                    help="resize factor applied before processing (speed lever)")
-    p.add_argument("--budget", type=int, default=N_TRI_BUDGET,
-                   help=f"triangle cap (default {N_TRI_BUDGET}; hard max "
-                        f"{MAX_TRIANGLES})")
+    p.add_argument("--budget", type=int, default=pre["budget"],
+                   help=f"triangle cap (hard max {MAX_TRIANGLES})")
     p.add_argument("--smax", type=int, default=32, help="largest brick side")
     p.add_argument("--smin", type=int, default=1, help="smallest brick side")
-    p.add_argument("--k", type=int, default=16, help="palette size (>3)")
+    p.add_argument("--k", type=int, default=pre["k"], help="palette size (>3)")
     p.add_argument("--partition", choices=["quadtree", "region_merge"],
                    default="quadtree")
     p.add_argument("--priority", choices=["mse", "edgef1"], default="mse")
@@ -338,7 +322,7 @@ def main():
                 if not ok or frame is None:
                     print("[task4] frame read failed; stopping")
                     break
-            canvas, info = render_frame(frame, cfg, timer)
+            canvas, processed, info = render_frame(frame, cfg, timer)
 
             # FPS is the FULL loop period (read + process + display), so the
             # timestamp must be taken AFTER the work, not right after `read`.
@@ -353,22 +337,30 @@ def main():
             fps = 0.8 * fps + 0.2 * (1.0 / dt) if fps else 1.0 / dt
 
             n_frames += 1
+
+            # The window shows the camera frame and this project's render side by
+            # side: the pair is the deliverable, because a mosaic judged without
+            # its source tells the viewer nothing about fidelity.
+            view, render_x0 = make_side_by_side(processed, canvas)
+
             if args.save_render:
-                # Save the ORIGINAL frame next to the render on purpose: the
-                # report's "real-world scenario" figures need the before/after
-                # pair, and a render alone cannot show what the bricks replaced.
-                # Input is the resized frame actually processed, so the two
-                # images are pixel-aligned and directly comparable.
-                processed = frame
+                # Save all three on purpose: the two panes are pixel-aligned with
+                # each other and with the composite, so the report can use either
+                # the pair or the single figure without re-capturing.
                 save_png(os.path.join(args.save_render, "frame0001_input.png"),
                          processed)
                 save_png(os.path.join(args.save_render, "frame0001_render.png"),
                          canvas)
-                print(f"[task4] saved input+render -> {args.save_render}")
+                save_png(os.path.join(args.save_render, "frame0001_compare.png"),
+                         view)
+                print(f"[task4] saved input+render+compare -> {args.save_render}")
                 break
+
             if not args.no_show:
-                draw_hud(canvas, fps, info, cfg, paused, timer)
-                cv2.imshow(WINDOW, canvas)
+                # HUD goes over the RENDER pane (`render_x0`), not the middle of
+                # the composite, so it never straddles the separator.
+                draw_hud(view, fps, info, cfg, paused, timer, x0=render_x0)
+                cv2.imshow(WINDOW, view)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), 27):
                     break
@@ -377,11 +369,19 @@ def main():
                 if key == ord("r"):
                     timer.reset()
                 if key == ord("s"):
+                    # Snapshot what is ON SCREEN (the composite), so the saved
+                    # image is exactly the evidence the viewer just looked at.
                     path = os.path.join(args.snapshot_dir,
                                         f"snap_{snapshots:03d}.png")
-                    save_png(path, canvas)
+                    save_png(path, view)
                     print(f"[task4] snapshot -> {path}")
                     snapshots += 1
+                # Clicking the window's close button destroys it behind our back;
+                # this is how we notice and exit cleanly instead of drawing into
+                # a window that no longer exists.
+                if window_closed(WINDOW):
+                    print("[task4] window closed by user")
+                    break
 
             if n_frames % 10 == 1 or args.max_frames:
                 print(f"  frame {n_frames:4d}  tris={info['n_tri']:5d}  "
