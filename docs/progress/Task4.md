@@ -239,6 +239,35 @@ display images), against `L1_baseline/frame0001_compare.png`:
 An explicit flag overrides the preset. Named presets exist so that retuning a
 viewing default cannot silently move the baseline the report quotes.
 
+##### Window size and resizability
+
+The first version used plain `cv2.imshow`, which creates a window locked to the
+image's pixel size: `WND_PROP_AUTOSIZE` returns 1.0 and the window cannot be
+dragged larger, so on a large monitor the panes look tiny with no way to fix it.
+It now uses `cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)`, i.e. resizable by
+dragging, plus `--window-scale` for the initial size. Verified by querying the
+property in both modes:
+
+| Window creation | `WND_PROP_AUTOSIZE` | Meaning |
+|---|---|---|
+| plain `cv2.imshow` (before) | 1.0 | locked to image size, cannot be dragged |
+| `namedWindow(..., WINDOW_NORMAL)` (now) | **0.0** | resizable |
+
+The second half of the same complaint was that the picture was too small, and the
+cause was the `watch` preset choosing `--scale 0.5` -- which shrinks *both* panes
+to 320×240 and so produces a 646×266 composite. Reduced resolution is the wrong
+lever for a side-by-side view: the honest speed levers are the brick count and
+(only if still needed) the resolution, and lowering the count keeps the picture at
+full size. `watch` now keeps `scale 1.0` and lowers only the budget:
+
+| Preset | scale | budget | K | Composite size | FPS |
+|---|---|---|---|---|---|
+| `quality` | 1.0 | 9990 | 16 | 1286×506 | 0.45 |
+| `watch` (default) | 1.0 | 1000 | 8 | **1286×506** | **2.90** |
+
+So the default is now a ~4× larger picture for ~25% less frame rate than the
+previous `watch`, and both presets render at the camera's native 640×480.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.

@@ -159,3 +159,43 @@ class StageTimer:
             "total_ms": sum(v["total_ms"] for v in out.values()),
         }
         return out
+
+
+# The pipeline stages a per-frame run reports. Kept here rather than in the
+# camera driver so the printed table has one definition shared by every driver
+# that uses StageTimer; a stage missing from `timer.samples` is simply skipped.
+STAGES = ("partition", "triangles", "means", "palette", "quantize", "render")
+
+
+def print_stage_summary(timer, n_frames, wall_s, context=None):
+    """Print the run summary: effective FPS plus median/mean ms per stage.
+
+    Function
+    --------
+    Formats a `StageTimer` report for the console. This is the measurement that
+    Task 4's Level 4 table quotes, and it prints the same numbers the live HUD
+    reads, so what was on screen and what is in the log cannot disagree.
+
+    Shape/semantics: no arrays. `context` is an optional dict of label -> value
+    printed as a configuration line (e.g. {"scale": 0.5, "budget": 2000}), so the
+    caller can record what the numbers belong to without this function knowing
+    anything about a config object. `effective` is `n_frames / wall_s`, the
+    end-to-end rate INCLUDING the camera read, which the per-stage rows exclude --
+    that is why the effective FPS is always a little below `1000/median_ms`.
+    Stage rows are looked up in `STAGES` order; a stage with no samples is
+    skipped, so a partial run prints a shorter table rather than raising.
+    """
+    rep = timer.report()
+    print("\n=== run summary ===")
+    print(f"  frames={n_frames}  wall={wall_s:.1f}s  "
+          f"effective={n_frames / max(wall_s, 1e-6):.2f} FPS")
+    if context:
+        print("  " + "  ".join(f"{k}={v}" for k, v in context.items()))
+    print(f"  {'stage':<12s} {'n':>5s} {'median_ms':>10s} {'mean_ms':>10s}")
+    for name in STAGES:
+        if name in rep:
+            print(f"  {name:<12s} {rep[name]['n']:5d} "
+                  f"{rep[name]['median_ms']:10.1f} {rep[name]['mean_ms']:10.1f}")
+    print(f"  {'TOTAL':<12s} {'':>5s} "
+          f"{rep['__total__']['median_ms']:10.1f} "
+          f"{rep['__total__']['mean_ms']:10.1f}   (excludes camera read)")

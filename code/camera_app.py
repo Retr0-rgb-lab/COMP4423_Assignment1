@@ -12,7 +12,10 @@ it is the honest baseline the Level 4 before/after comparison is measured agains
 The window shows BOTH panes: `a) camera input` left, `b) triangle bricks` right,
 live statistics drawn over the render pane. Showing the source beside the result
 is the point -- a mosaic judged without its input says nothing about fidelity.
-Close it with the window's X (or q/ESC); X is detected via
+It is created with `WINDOW_NORMAL`, so it is resizable by dragging (the default
+`imshow` window is locked to the image's pixel size -- `WND_PROP_AUTOSIZE` is 1.0
+-- and cannot be enlarged, which looks tiny on a large monitor). `--window-scale`
+sets the initial size. Close it with the window's X (or q/ESC); X is detected via
 `brick_display.window_closed`.
 
 Per frame: read -> (resize) -> partition -> triangles -> means -> palette ->
@@ -43,8 +46,9 @@ from brick_quadtree import quadtree_partition  # noqa: E402
 from brick_region_merge import region_merge_partition  # noqa: E402
 from brick_color import build_palette, quantize_nearest_bgr  # noqa: E402
 from brick_render import triangle_means_bgr, render_triangles  # noqa: E402
-from brick_io import save_png, StageTimer  # noqa: E402
-from brick_display import make_side_by_side, draw_hud, window_closed  # noqa: E402
+from brick_io import save_png, StageTimer, print_stage_summary  # noqa: E402
+from brick_display import (make_side_by_side, composite_size, draw_hud,
+                           window_closed)  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SNAPSHOT_DIR = os.path.join(HERE, "pics", "task4")
@@ -52,11 +56,13 @@ N_TRI_BUDGET = 9990  # 10-triangle margin under the 10000 cap, same as Task 3
 WINDOW = "Task 4: triangle-brick camera"
 
 # `quality` is the config whose per-stage cost is recorded in
-# docs/progress/Task4.md; `watch` is the watchable one, reached purely by lowering
-# resolution and brick count. Named presets stop the report's baseline numbers
+# docs/progress/Task4.md. `watch` is the watchable one, and it lowers ONLY the
+# brick count -- deliberately not the resolution, because `--scale` shrinks both
+# panes of the side-by-side view and a small picture defeats the point of showing
+# the source next to the render. Named presets stop the report's baseline numbers
 # from drifting when a viewing default gets retuned.
 PRESETS = {
-    "watch": {"scale": 0.5, "budget": 2000, "k": 8},
+    "watch": {"scale": 1.0, "budget": 1000, "k": 8},
     "quality": {"scale": 1.0, "budget": N_TRI_BUDGET, "k": 16},
 }
 
@@ -206,34 +212,6 @@ def render_frame(frame, cfg, timer):
     return canvas, processed, info
 
 
-def print_summary(timer, cfg, n_frames, wall_s):
-    """Print the exit summary: effective FPS plus median ms per stage.
-
-    Function: this is the measurement that Task 4's Level 4 table quotes. It
-    prints the same `StageTimer.report()` the HUD reads, so screen and log agree.
-
-    Shape: no arrays. Semantics: `frames/s` is the end-to-end rate including the
-    camera read, which the per-stage rows do NOT include -- that is why the
-    reported FPS is always a little below `1000/median_frame_ms`.
-    """
-    rep = timer.report()
-    wall_exec = max(wall_s, 1e-6)
-    print(f"\n=== Task 4 run summary ===")
-    print(f"  frames={n_frames}  wall={wall_s:.1f}s  "
-          f"effective={n_frames / wall_exec:.2f} FPS")
-    print(f"  resolution scale={cfg.scale}  budget={cfg.budget}  "
-          f"S_set={cfg.S_set}  K={cfg.K}")
-    print(f"  {'stage':<12s} {'n':>5s} {'median_ms':>10s} {'mean_ms':>10s}")
-    for name in ["partition", "triangles", "means", "palette", "quantize",
-                 "render"]:
-        if name in rep:
-            print(f"  {name:<12s} {rep[name]['n']:5d} "
-                  f"{rep[name]['median_ms']:10.1f} {rep[name]['mean_ms']:10.1f}")
-    print(f"  {'TOTAL':<12s} {'':>5s} "
-          f"{rep['__total__']['median_ms']:10.1f} "
-          f"{rep['__total__']['mean_ms']:10.1f}   (excludes camera read)")
-
-
 def main():
     """CLI entry: parse args, open the camera, run the loop, print the summary.
 
@@ -281,6 +259,9 @@ def main():
                         "exit; works headless (how Task 4's evidence is made)")
     p.add_argument("--max-frames", type=int, default=0,
                    help="stop after N frames (0 = run until quit); for benchmarks")
+    p.add_argument("--window-scale", type=float, default=1.0,
+                   help="initial window size as a multiple of the composite's "
+                        "natural pixel size; the window is resizable by dragging")
     p.add_argument("--no-show", action="store_true",
                    help="headless: no window, no keyboard")
     args = p.parse_args()
@@ -309,6 +290,20 @@ def main():
     # frame content; without this the palette can drift between sessions and the
     # before/after FPS-quality comparison would not be repeatable.
     cv2.setRNGSeed(0)
+
+    if not args.no_show:
+        # `WINDOW_NORMAL` is what makes the window draggable. The default imshow
+        # window is locked to the image's pixel size, so on a large monitor the
+        # two panes look tiny and there is no way to enlarge them.
+        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+        pane = frame.shape[:2]
+        if cfg.scale != 1.0:
+            pane = (int(pane[0] * cfg.scale), int(pane[1] * cfg.scale))
+        vh, vw = composite_size(pane)
+        cv2.resizeWindow(WINDOW, max(1, int(vw * args.window_scale)),
+                         max(1, int(vh * args.window_scale)))
+        print(f"[task4] window {vw}x{vh} px "
+              f"(x{args.window_scale}); drag its edges to resize")
 
     timer = StageTimer()
     snapshots, paused, fps = 0, False, 0.0
@@ -393,7 +388,9 @@ def main():
         cap.release()
         if not args.no_show:
             cv2.destroyAllWindows()
-        print_summary(timer, cfg, n_frames, time.perf_counter() - t_start)
+        print_stage_summary(timer, n_frames, time.perf_counter() - t_start,
+                            context={"scale": cfg.scale, "budget": cfg.budget,
+                                     "S_set": cfg.S_set, "K": cfg.K})
 
 
 if __name__ == "__main__":

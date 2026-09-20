@@ -25,8 +25,27 @@ HUD_FG = (255, 255, 255)
 PANE_BG = (24, 24, 24)
 CAPTION_FG = (230, 230, 230)
 
+# Layout constants, exported so a caller can compute the window size it needs
+# before the first frame exists -- duplicating the 26/6 literals elsewhere would
+# silently break the initial window size the day the layout changes.
+CAPTION_H = 26
+GAP = 6
 
-def make_side_by_side(original, render, gap=6, caption_h=26):
+
+def composite_size(pane_shape):
+    """Rows and columns the side-by-side composite will have for a pane.
+
+    Shape/semantics: takes a pane shape `(h, w)` or `(h, w, 3)` and returns
+    `(rows, cols)` = `(h + CAPTION_H, 2*w + GAP)`. Needed because the window is
+    created before the first frame is rendered: `camera_app` uses this to size the
+    window for the layout it is about to produce, using the same constants
+    `make_side_by_side` uses, rather than restating them.
+    """
+    h, w = pane_shape[0], pane_shape[1]
+    return h + CAPTION_H, 2 * w + GAP
+
+
+def make_side_by_side(original, render, gap=GAP, caption_h=CAPTION_H):
     """Compose the camera frame and the render into one left/right image.
 
     Function
