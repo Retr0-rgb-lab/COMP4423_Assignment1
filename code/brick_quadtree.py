@@ -73,15 +73,12 @@ def _quadtree_priority(img, leaf, priority):
               A leaf with `size <= 1` always scores 0.0 and can never be split
               further, which is how the quadtree terminates.
 
-    Gotcha: `priority` is matched with `if priority == "edgef1" ... else mse`,
-    so ANY unrecognised string (e.g. the plausible typo "sobel") silently selects
-    the mse branch instead of raising. That is a real trap for the E_priority
-    experiment: a mislabelled run would produce mse numbers reported under an
-    edgef1 label, and the metrics alone would not reveal it. Nothing validates
-    the value today -- `Task3Config.priority` has no check and the only thing
-    keeping it correct is the hardcoded ["mse", "edgef1"] list in
-    `triangle_brick_task3.build_experiment_grid`. Add a guard at
-    `quadtree_partition` before introducing a third priority mode.
+    Gotcha: `priority` is matched with `if priority == "edgef1" ... else mse`, so
+    an unrecognised string would select the mse branch silently -- a mislabelled
+    run would produce mse numbers reported under an edgef1 label, and the metrics
+    alone would not reveal it. `quadtree_partition` now rejects anything outside
+    {"mse", "edgef1"} up front, so this branch is only reachable with a valid
+    value; keep the entry-point check if a third mode is added here.
     """
     x, y, size = leaf
     if size <= 1:
@@ -118,7 +115,8 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse"):
               of 2 so a leaf can keep halving.
       max_triangles : int — hard budget (default 10000).
       priority     : "mse" (default, uses ΔMSE/6) or "edgef1"
-                     (uses Sobel variance).
+                     (uses Sobel variance). Validated at the top of the
+                     function; anything else raises ValueError.
     Intermediate:
       leaves : dict {(x, y, size) -> mse_float}. `leaves[k]` is the MSE
                of the square at (x, y) with side `size` in PADDED coords.
@@ -132,6 +130,13 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse"):
         padded_shape   : (Hp, Wp) — padded image extent.
         orig_shape     : (H, W) — original input size for later crop.
     """
+    # Validate up front: this is the only guard on `priority`, and a silent
+    # fallback to "mse" would relabel an experiment without any metric showing
+    # it (see the Gotcha note in _quadtree_priority's docstring).
+    if priority not in ("mse", "edgef1"):
+        raise ValueError(
+            f"Unknown priority {priority!r}; expected 'mse' or 'edgef1'.")
+
     padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
     Hp, Wp = padded.shape[:2]

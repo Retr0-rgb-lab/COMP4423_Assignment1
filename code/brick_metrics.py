@@ -47,6 +47,30 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from brick_geom import MAX_TRIANGLES
 
 
+def _ssim_window(shape):
+    """Largest odd SSIM window (<= 7) that still fits inside `shape`.
+
+    Function
+    --------
+    skimage's SSIM rejects an even window, and rejects a window larger than the
+    image. Both callers below need exactly that clamp, so this is the single
+    place the rule lives; they differ only in what happens when NO valid window
+    exists -- `compute_metrics` raises, `multi_scale_ssim` stops descending.
+
+    Shape: `shape` is any shape tuple; only the last two entries are read, so
+    `img.shape` on an (H, W, 3) array is accepted directly. Returns an int, or
+    None when `min(H, W) < 3` (no odd window >= 3 can fit).
+    Semantics: the result is `min(7, m)` for odd `m` and `min(7, m - 1)` for even
+    `m`, where `m = min(H, W)`. For any image at least 9 px on its short side
+    that is exactly 7 -- i.e. bit-identical to what both callers computed before
+    this helper existed, so no recorded Task 2/3 number changes.
+    """
+    m = min(shape[-2], shape[-1])
+    if m < 3:
+        return None
+    return min(7, m if m % 2 else m - 1)
+
+
 def multi_scale_ssim(img, canvas, levels=4):
     """Mean SSIM at progressively downsampled resolutions (MS-SSIM).
 
@@ -65,30 +89,33 @@ def multi_scale_ssim(img, canvas, levels=4):
     Intermediate:
       g_orig, g_out : (H, W) float64 grayscale, then each further iteration
                       works on (H // 2**k, W // 2**k).
-      win           : int -- SSIM window, forced odd-ish by `min(7, min(shape) - 1)`
-                      because skimage rejects a window larger than the image.
+      win           : int -- SSIM window for the current level, from the shared
+                      `_ssim_window` helper (odd, <= 7, fits the level).
     Output:
       float -- mean of the per-level SSIM scores.
 
     Edge case / known wart
     ----------------------
-    If a level's window would fall below 3 pixels, the loop `break`s EARLY.
-    The mean is then taken over fewer than `levels` scales, SILENTLY -- the
-    return value does not reveal how many scales contributed. Do not compare
-    this number across images of very different sizes without checking that
-    both got the full 4 levels.
+    If a level is too small for any valid window (`_ssim_window` returns None),
+    the loop `break`s EARLY. The mean is then taken over fewer than `levels`
+    scales, SILENTLY -- the return value does not reveal how many scales
+    contributed. Do not compare this number across images of very different
+    sizes without checking that both got the full 4 levels.
 
-    NOTE: `compute_metrics` solves the same small-image window problem with a
-    DIFFERENT formula (an even/odd branch plus `max(win, 3)`). The two are not
-    equivalent; see the TODO in `compute_metrics`.
+    Window convention: shared with `compute_metrics` via `_ssim_window`, so the
+    file no longer has two different small-image rules. The one behaviour change
+    from unifying them: a level exactly 3 px across (m=3) now gets scored with
+    win=3 instead of being skipped, because 3 is a legal window that the old
+    `min(7, m - 1)` rule threw away as even (m-1 = 2). Unreachable from the
+    images used in Tasks 2-3 (the pyramid starts at m >= 37).
     """
     g_orig = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float64)
     g_out = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY).astype(np.float64)
     scores = []
     cur_o, cur_c = g_orig, g_out
     for _ in range(levels):
-        win = min(7, min(cur_o.shape) - 1)
-        if win < 3:
+        win = _ssim_window(cur_o.shape)
+        if win is None:
             break
         scores.append(structural_similarity(cur_o, cur_c, data_range=255,
                                             win_size=win))
@@ -333,28 +360,29 @@ def compute_metrics(img, canvas, means_bgr, labels, palette_bgr, n_triangles,
       elapsed_s   : float -- seconds for whatever interval the CALLER chose.
                     Only used for FPS; see the module-level FPS caveat.
     Intermediate:
-      win : int -- SSIM window, see the TODO below.
+      win : int -- SSIM window for the whole image, from the shared
+            `_ssim_window` helper (odd, <= 7, fits the image). For any image at
+            least 9 px on its short side this is 7, so the value -- and hence
+            every recorded SSIM -- is unchanged from before the helper existed.
     Output:
       dict -- 12 numeric fields + "Heatmap" (H, W, 3). Keys:
               PSNR, SSIM, MS-SSIM, Delta_E_2000, Edge_F1, Edge_Precision,
               Edge_Recall, EPI, Quant_Error, Budget_Util, N_Triangles, FPS,
               Heatmap.
 
-    TODO(edge case, not currently reachable): `max(win, 3)` on the line below
-    can push the window ABOVE what the image can hold -- for min(H, W) < 4 the
-    even/odd branch yields win <= 1 and the clamp then forces 3, which makes
-    skimage raise. Every image used so far is far larger, so this has never
-    fired. Fix by clamping to the image instead of to a constant, and by
-    reusing `multi_scale_ssim`'s window convention so the file has one rule
-    rather than two.
+    Raises:
+      ValueError -- when `min(H, W) < 3`, i.e. no valid SSIM window exists.
+      Previously this case crashed inside skimage with an opaque window-size
+      error, because the old code forced a window of 3 onto an image that could
+      not hold one. Failing explicitly is the fix; SSIM is simply undefined for
+      images under 3 px on a side.
     """
     H, W = img.shape[:2]
     psnr = float(peak_signal_noise_ratio(img, canvas, data_range=255))
-    # SSIM wants an odd window that fits inside the image. The branch drops 1
-    # only for even dimensions, then raises the floor to 3 -- see the TODO in
-    # this function's docstring for why that floor is the wrong clamp.
-    win = min(7, min(H, W) - 1 if min(H, W) % 2 == 0 else min(H, W))
-    win = max(win, 3)
+    win = _ssim_window((H, W))
+    if win is None:
+        raise ValueError(
+            f"Image {H}x{W} is too small for SSIM (needs min side >= 3).")
     ssim = float(structural_similarity(
         img, canvas, data_range=255, channel_axis=2, win_size=win
     ))

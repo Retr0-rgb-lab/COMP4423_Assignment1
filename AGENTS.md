@@ -255,7 +255,7 @@ AI 改任何代码前,**先**用一两段话讲:
 | 状态 | `git status` |
 | 推送(阶段结束) | `git add code/ docs/progress/ && git commit -m "taskN: 简述" && git push` |
 | 激活虚拟环境 | `source ../venv/bin/activate` (Git Bash) / `..\venv\Scripts\activate` (PowerShell) |
-| 跑 Task 2 样例 | `python code/triangle_brick.py --input code/sky.jpg --output out.png` |
+| 跑 Task 2 样例 | `python code/triangle_brick.py --input code/pics/sky.jpg --output code/pics/task2/out_task2.png` |
 
 (命令随 Task 推进补全)
 

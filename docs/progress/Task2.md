@@ -74,13 +74,13 @@ Single method (default = otsu):
 
 ```bash
 cd "D:\Program Files\learn_torch\python-cv\Assignment1"
-..\venv\Scripts\python code\triangle_brick.py --input code\sky.jpg --output code\out_task2.png --no-show
+..\venv\Scripts\python code\triangle_brick.py --input code\pics\sky.jpg --output code\pics\task2\out_task2.png --no-show
 ```
 
 Compare all three:
 
 ```bash
-..\venv\Scripts\python code\triangle_brick.py --input code\sky.jpg --output code\out_task2.png --compare --no-show
+..\venv\Scripts\python code\triangle_brick.py --input code\pics\sky.jpg --output code\pics\task2\out_task2.png --compare --no-show
 ```
 
 Actual (`code/sky.jpg`, 1706×1279, after `--compare`):
@@ -185,11 +185,12 @@ mapped to the *middle* class regardless of local variation, hence the
 perceptually large color error. This is the visual companion to the
 ΔE2000 gap (11.7 → 12.1).
 
-Output artifacts:
-- `code/out_task2_otsu.png`, `code/out_task2_kmeans.png`, `code/out_task2_fixed.png`
-- `code/out_task2_compare.png` — 2×2 grid (original + 3 results) with key metrics in label
-- `code/out_task2_residual.png` — 3-row ΔE2000 heatmap panel (JET colormap)
-- `code/out_task2_metrics_chart.png` — 2-subplot bar chart ([0,1] + absolute-scale)
+Output artifacts (all under `code/pics/task2/`, per AGENTS 1.1; the runs above
+were recorded before the move, when they sat in `code/`):
+- `code/pics/task2/out_task2_otsu.png`, `out_task2_kmeans.png`, `out_task2_fixed.png`
+- `code/pics/task2/out_task2_compare.png` — 2×2 grid (original + 3 results) with key metrics in label
+- `code/pics/task2/out_task2_residual.png` — 3-row ΔE2000 heatmap panel (JET colormap)
+- `code/pics/task2/out_task2_metrics_chart.png` — 2-subplot bar chart ([0,1] + absolute-scale)
 
 ## Known limitations / TODOs
 

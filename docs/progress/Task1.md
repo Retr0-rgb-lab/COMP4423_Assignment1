@@ -28,8 +28,8 @@
 
 ```bash
 cd "D:\Program Files\learn_torch\python-cv\Assignment1"
-..\venv\Scripts\python code/capture.py              # default sky.jpg
-..\venv\Scripts\python code/capture.py code/sky.jpg # explicit arg
+..\venv\Scripts\python code/capture.py                    # default (code/pics/sky.jpg)
+..\venv\Scripts\python code/capture.py code/pics/sky.jpg   # explicit arg
 ```
 
 Expected:

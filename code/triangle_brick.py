@@ -44,7 +44,37 @@ from brick_viz import make_compare_grid, make_residual_panel, make_metrics_bar_c
 
 
 DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jpg")
-DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out_task2.png")
+# Outputs live under pics/task2/ (AGENTS 1.1: every image, input or output,
+# goes in pics/). The directory part of this path drives where `--compare`
+# writes its companion files, so keep it a directory, not a bare filename.
+DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "pics", "task2", "out_task2.png")
+
+
+def save_png(path, img):
+    """Write `img` to `path` as PNG, creating the parent directory first.
+
+    Function
+    --------
+    Wraps `cv2.imwrite` because that call reports failure by RETURN VALUE, not by
+    exception: writing into a directory that does not exist returns False and
+    prints nothing, so a run can appear to succeed while producing no output.
+    That is easy to hit now that the default output lives in `pics/task2/`, which
+    may not exist on a fresh checkout. This raises instead.
+
+    Shape: `img` is (H, W, 3) uint8 BGR (any size); `path` is a str. Semantics:
+    nothing is transformed -- the array is encoded as-is, so a BGR array is
+    written as a BGR PNG (correct for OpenCV, and why nothing here converts
+    colour order).
+
+    Raises:
+      IOError -- when `cv2.imwrite` returns falsy: an unwritable directory, an
+      unknown extension, or a bad array dtype (e.g. float32, which OpenCV will
+      not encode as PNG).
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    if not cv2.imwrite(path, img):
+        raise IOError(f"cv2.imwrite failed for {path}")
 
 
 def preprocess(img):
@@ -180,7 +210,7 @@ def run_single(img, method, args):
               "Edge_Precision", "Edge_Recall", "EPI", "Quant_Error",
               "Budget_Util", "FPS"]:
         print(f"[task2:{method}] {k:<16}= {metrics[k]:.4f}")
-    cv2.imwrite(args.output, canvas)
+    save_png(args.output, canvas)
     print(f"[task2:{method}] output = {args.output}")
     return canvas, metrics
 
@@ -190,11 +220,12 @@ def run_compare(img, args):
 
     Function
     --------
-    Same geometry, same means, three different quantizers. Saves:
-      out_task2_<method>.png         — per-method rendered canvas
-      out_task2_compare.png           — 4-tile grid (original + 3 methods)
-      out_task2_residual.png          — per-method JET heatmap panel
-      out_task2_metrics_chart.png     — bar chart of all metrics
+    Same geometry, same means, three different quantizers. Saves, under the
+    directory of `args.output` (default `pics/task2/`):
+      <dir>/out_task2_<method>.png  — per-method rendered canvas
+      <dir>/out_task2_compare.png   — 4-tile grid (original + 3 methods)
+      <dir>/out_task2_residual.png  — per-method JET heatmap panel
+      <dir>/out_task2_metrics_chart.png — bar chart of all metrics
 
     Fairness note: `preprocess` runs ONCE and its means are reused for all three
     methods, so the only variable is the quantizer. Timing is therefore also
@@ -222,6 +253,8 @@ def run_compare(img, args):
 
     metrics_by_method = {}
     heatmaps = []
+    # Output directory comes from `args.output`; default pics/task2/ (AGENTS 1.1).
+    # `save_png` creates it and raises on a write failure -- see its docstring.
     out_dir = os.path.dirname(os.path.abspath(args.output))
 
     for method in ["otsu", "kmeans", "fixed"]:
@@ -235,7 +268,7 @@ def run_compare(img, args):
               f"SSIM={metrics['SSIM']:.4f} PSNR={metrics['PSNR']:.2f} "
               f"ΔE={metrics['Delta_E_2000']:.2f} EdgeF1={metrics['Edge_F1']:.4f} "
               f"({elapsed:.2f}s)")
-        cv2.imwrite(os.path.join(out_dir, f"out_task2_{method}.png"), canvas)
+        save_png(os.path.join(out_dir, f"out_task2_{method}.png"), canvas)
         # Stash canvas + heatmap inside metrics so make_compare_grid /
         # make_residual_panel can find them without separate plumbing.
         metrics["_canvas"] = canvas
@@ -246,13 +279,13 @@ def run_compare(img, args):
     grid = make_compare_grid(img, [(m, metrics_by_method[m])
                                    for m in ["otsu", "kmeans", "fixed"]])
     grid_path = os.path.join(out_dir, "out_task2_compare.png")
-    cv2.imwrite(grid_path, grid)
+    save_png(grid_path, grid)
 
     # Per-method JET heatmap panel for the report.
     residual = make_residual_panel([h for _, h in heatmaps],
                                    [m for m, _ in heatmaps])
     res_path = os.path.join(out_dir, "out_task2_residual.png")
-    cv2.imwrite(res_path, residual)
+    save_png(res_path, residual)
 
     # Bar chart across all metrics / methods (matplotlib figure).
     fig = make_metrics_bar_chart(metrics_by_method)
