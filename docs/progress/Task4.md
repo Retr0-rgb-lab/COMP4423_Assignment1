@@ -157,29 +157,56 @@ measurement so the Level 4 table is built from real numbers as we go.
 - `python code/camera_app.py` — the live window (must be run on the desktop;
   WSL has no display).
 
-## Open questions to investigate before the Level 3 work
+## Frame rate at three settings, and where the cheap wins are
 
-**`build_palette` cost is not understood yet, and it is not monotone in the
-triangle count.** Observed medians for `K=16, kmeans_lab`:
+Steady-state numbers from 10–30 frame headless runs (long enough that the
+one-time warm-up below is amortized), all at 640×480 camera capture:
 
-| Setting | Triangles | `build_palette` median |
+| Setting (`--scale` / `--budget` / `--k`) | Effective FPS | Frame total | `partition` | `means` | `palette` | `render` |
+|---|---|---|---|---|---|---|
+| 1.0 / 9990 / 16 (Task 3 best config, full quality) | **0.45** | 2124 ms | 436 | 1598 | 23 | 49 |
+| 0.5 / 2000 / 16 | **3.89** | 177 ms | 80 | 78 | 7 | 9 |
+| 0.4 / 1000 / 6 | **9.06** | 77 ms | 42 | 26 | 3 | 5 |
+
+Two things this establishes, both of which the Level 4 write-up needs:
+
+1. **The full-quality configuration is genuinely ~0.45 FPS**, not a warm-up
+   artifact — 10 frames took 22.5 s. So "real-time" is a real engineering problem
+   here, not a rounding issue.
+2. **Cheap levers alone reach ~9 FPS** (reduce resolution and triangle budget),
+   with no algorithmic change. That is the right first row of the before/after
+   table: subsequent optimization must beat *9 FPS at 1000 triangles / 0.4 scale*,
+   not the easier target of 0.45 FPS. It also makes the trade-off explicit — the
+   9 FPS mode is visibly coarser, which is exactly the quality-vs-speed comparison
+   the Level 4 requirement asks for.
+
+## Correction: the `build_palette` "anomaly" was a measurement artifact
+
+An earlier version of this file claimed `build_palette` got ~12× slower when the
+colour count dropped ~6× (24.6 ms at 9990 triangles vs ~300 ms at ~1500) and
+listed it as an unexplained anomaly. **That was wrong, and the error was mine.**
+
+The 300 ms figures came from runs of only **2 frames**. With two samples the
+median is the *mean of the two*, so a run of `[~590 ms warm-up, ~5 ms normal]`
+reports a median of ~300 ms — which I read as a per-frame cost. Longer runs show
+the real shape:
+
+| Run length | `palette` median | `palette` mean |
 |---|---|---|
-| 640×480, scale 1.0, budget 9990 | 9990 | 24.6 ms (mean 105 ms — one ~660 ms warm-up frame) |
-| 320×240, scale 0.5, budget 2000 | 1996 | 324 ms |
-| 320×240, scale 0.5, budget 1500 | 1498 | 297 ms |
+| 2 frames | 304 ms | 304 ms |
+| 3 frames | 3.8–7.5 ms | 171–180 ms |
+| 30 frames | 2.7 ms | 21.2 ms |
 
-So the stage got ~12× slower while the number of colours to cluster dropped ~6×.
-Whatever the cause, it is not "more points, more time", so the optimization plan
-should not assume `build_palette` is cheap just because it is cheap in the
-full-budget case. Candidate explanations to test (not yet tested): OpenCV's
-K-Means++ init with `attempts=10` converging slowly on data with many duplicate
-means (a small budget on a downscaled frame produces large flat regions), or
-cluster re-seeding when clusters empty out. Do not write an explanation into the
-report until it is measured — the first hypothesis tried is rarely the right one.
+So `build_palette` has a **one-time warm-up of roughly 0.5–0.6 s on the first
+call** (OpenCV K-Means and/or skimage Lab initialisation) and then costs
+**3–25 ms per frame** — cheap, and monotone in the triangle count, as one would
+expect. There is no anomaly.
 
-Consequence for the plan: the palette EMA / geometry reuse optimization may matter
-more than expected at the smaller budgets a real-time mode would use, and
-`build_palette` needs its own micro-benchmark before and after that change.
+Process lesson, recorded because it is the same class of mistake as the Task 3
+reporting bias: **do not read per-stage percentages off a run too short for the
+statistic to mean anything.** With n=2 a "median" is just a mean, and a single
+warm-up frame can masquerade as a persistent cost for any stage. All numbers in
+this file now come from ≥10-frame runs.
 
 ## Known limitations / TODOs
 
