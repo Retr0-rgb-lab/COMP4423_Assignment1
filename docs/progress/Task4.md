@@ -496,6 +496,50 @@ Two conclusions, and the second one matters for Task 5:
    because it means the Task 3 sweep's *comparisons* are still meaningful (every run
    is affected the same way) while its exact decimal values are not reproducible.
 
+## Terminology: the budget counts BRICKS, not cells
+
+Worth stating explicitly because it is easy to conflate and the report must not:
+the PDF caps "no more than 10,000 individual **triangular bricks**, counting **each
+triangle as one brick**". So the budget is in triangles. A CELL is a square that
+gets cut into two bricks, so
+
+    bricks = 2 x cells        cells = bricks / 2
+
+`--budget 9990` therefore produces **4995 cells**, not 9990. Everything in the
+quadtree code that the report quotes (`N_Triangles` and `N_Cells`) is labelled to
+match, and the Task 3 size summary must report the CELL counts per size doubled
+into brick counts -- `plot_size_histogram` already does this.
+
+## Brick count vs frame cost, and why the default is now the full budget
+
+Measured with `render_frame` directly, alternating budgets in one process so they
+share the machine state, best of three runs each (640x480, `mse`, `fast` means,
+`sat` sse):
+
+| `--budget` (bricks) | cells | brick sizes present | frame ms | implied FPS |
+|---|---|---|---|---|
+| 996 | **498** | {8, 16, 32} | 72.6 | 13.8 |
+| 1998 | 999 | {4, 8, 16, 32} | 84.2 | 11.9 |
+| 4998 | 2499 | {2, 4, 8, 16, 32} | 136.8 | 7.3 |
+| **9990** | **4995** | {1, 2, 4, 8, 16, 32} | **215.7** | **4.6** |
+
+Two things this settles:
+
+1. **Cost scales gently.** Five hundred cells to five thousand cells is 3x the
+   frame time, not 10x, because the per-cell work is now O(1) (tables) rather than
+   proportional to the cell's area. The whole reason a low budget looked necessary
+   was the old O(T*H*W) mean extraction.
+2. **A low budget does not just look coarser, it loses the small sizes entirely.**
+   At 498 cells the smallest brick that can appear is 8 px; at 4995 cells the
+   distribution is {1: 108, 2: 1489, 4: 1853, 8: 1110, 16: 319, 32: 116}, i.e. the
+   fine bricks that give the mosaic its texture are 2 and 4. This is the measured
+   explanation of the earlier "the picture looks very poor" observation, and it was
+   a configuration problem, not an algorithm one.
+
+The default preset is therefore `quality` = the full 9990 bricks / K 16, with
+`balanced` (5000) and `fast` (2000) available for a machine that cannot keep up.
+The earlier `watch` preset at 1000 bricks was a pre-optimization crutch and is gone.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.

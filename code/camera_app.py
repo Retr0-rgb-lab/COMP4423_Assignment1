@@ -24,8 +24,8 @@ and the medians are printed at exit, so HUD and report share one measurement pat
 (see docs/progress/Task4.md).
 
 Usage (Windows venv; WSL has no display, so add --no-show there):
-    python code\\camera_app.py --preset watch      # default, smooth preview
-    python code\\camera_app.py --preset quality    # full Task 3 config, ~0.45 FPS
+    python code\\camera_app.py                    # default: full 9990 bricks
+    python code\\camera_app.py --preset fast      # fewer bricks, higher FPS
     python code\\camera_app.py --no-show --max-frames 30   # benchmark
 Any path you PASS resolves against the current directory (the defaults do not), so
 run from the repo root and pass `code/pics/task4/...`. Keys: q/ESC quit,
@@ -57,15 +57,21 @@ DEFAULT_SNAPSHOT_DIR = os.path.join(HERE, "pics", "task4")
 N_TRI_BUDGET = 9990  # 10-triangle margin under the 10000 cap, same as Task 3
 WINDOW = "Task 4: triangle-brick camera"
 
-# `quality` is the config whose per-stage cost is recorded in
-# docs/progress/Task4.md. `watch` is the watchable one, and it lowers ONLY the
-# brick count -- deliberately not the resolution, because `--scale` shrinks both
-# panes of the side-by-side view and a small picture defeats the point of showing
-# the source next to the render. Named presets stop the report's baseline numbers
-# from drifting when a viewing default gets retuned.
+# Three points on the measured brick-count / frame-cost curve; the table is in
+# docs/progress/Task4.md. Note `budget` counts BRICKS, i.e. triangles, not cells --
+# a cell is two bricks, so `quality` produces 4995 cells, not 9990.
+#
+# `quality` is the default because the PDF caps bricks at 10000 and grades the
+# output. The previous default (1000 bricks = 498 cells, sizes {8,16,32} only)
+# predates the performance work and had to stay low to be watchable, which is also
+# why the mosaic looked like coarse blocks: at that budget no brick smaller than 8
+# px ever appears. Measured, the full budget costs 216 ms/frame against 73 ms for
+# 498 cells -- 3x the cost for six brick sizes instead of three. `fast` exists for a
+# machine that cannot keep up; it is not the reference configuration.
 PRESETS = {
-    "watch": {"scale": 1.0, "budget": 1000, "k": 8},
     "quality": {"scale": 1.0, "budget": N_TRI_BUDGET, "k": 16},
+    "balanced": {"scale": 1.0, "budget": 5000, "k": 8},
+    "fast": {"scale": 1.0, "budget": 2000, "k": 8},
 }
 
 
@@ -212,14 +218,15 @@ def main():
     # The throwaway parser peeks at argv; `parse_known_args` tolerates everything
     # else, and an explicitly passed flag still overrides the preset default.
     peek = argparse.ArgumentParser(add_help=False)
-    peek.add_argument("--preset", choices=list(PRESETS), default="watch")
+    peek.add_argument("--preset", choices=list(PRESETS), default="quality")
     preset_name = peek.parse_known_args()[0].preset
     pre = PRESETS[preset_name]
 
     p.add_argument("--preset", choices=list(PRESETS), default=preset_name,
-                   help="'watch' = smooth preview (reduced resolution and brick "
-                        "budget); 'quality' = the full Task 3 configuration, "
-                        "~0.45 FPS. Any explicit flag below overrides it.")
+                   help="brick-count ladder, measured at 640x480 per frame: "
+                        "quality=9990 bricks/K16 (default, ~216 ms), "
+                        "balanced=5000/K8 (~137 ms), fast=2000/K8 (~84 ms). "
+                        "Any explicit flag below overrides it.")
     p.add_argument("--camera", type=int, default=0, help="camera index")
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
