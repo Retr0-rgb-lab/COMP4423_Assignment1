@@ -425,19 +425,46 @@ per-region form invents a mirrored neighbourhood. The code prints a warning when
 `edgef1` meets the table implementation, since the recorded E_priority results came
 from the per-region form. Task 4 uses `mse`, so this does not affect the camera app.
 
-### Measurement hygiene: two wrong numbers caught before they were published
+### Measurement hygiene: the stage numbers are solid, the app-level FPS is not
 
-Twice during this step a single short run produced a number that contradicted a
-repeat. The first `--sse ref` A/B reported 0.92 FPS (partition 756 ms) against a
-direct measurement of 330 ms for the same implementation; re-running gave 1.77 FPS.
-The cause was residual load from the previous command, not the code. Same class of
-error as the earlier n=2 median mistake: **a statistic read off one short run is
-not evidence.** Every number in this file now comes from repeated runs, with the
-best-of-N taken for timings, because a timing under load is a measurement of the
-load.
+Publishing end-to-end numbers from single runs was wrong more than once here, so
+this records what is and is not trustworthy from this machine.
 
-Artifacts: none yet for this step -- the partition change is geometry-identical, so
-the `pics/task4/L3_means/` renders remain valid for it.
+**Trustworthy: paired, in-process stage measurements.** Running both implementations
+alternately inside ONE process -- so they share the machine state, the memory layout
+and the clock -- gives stable results that reproduced across sessions:
+
+| Bricks | `ref` best | `sat` best | ratio | identical bricks |
+|---|---|---|---|---|
+| 2000 | 78.6 ms | 43.4 ms | 1.81x | yes |
+| 5000 | 173.4 ms | 65.5 ms | 2.65x | yes |
+| 9990 | 341.4 ms | 116.8 ms | **2.92x** | yes |
+
+**Not trustworthy: this machine's end-to-end FPS.** The same app invocation reported
+values spanning a factor of two or more between sessions: `--sse sat` at 9990 bricks
+measured 1.72, 2.73, 2.95, 3.15, 3.43 and 3.44 FPS, and `--sse ref` measured 0.61,
+0.92 and 1.93 FPS. One `--sse ref` run reported a `partition` stage of 1339 ms
+against a direct same-implementation measurement of 341 ms -- a 4x gap, far outside
+timing noise, and I have **not** explained it. A hypothesis (the per-frame
+`cv2.kmeans` in `build_palette` slowing the whole process under sustained mixed load,
+which would hurt the Python-loop `ref` path more than the vectorised `sat` one) is
+untested and is recorded as a hypothesis only.
+
+Consequences for the report:
+
+- quote the **ratios from paired measurements**, not absolute FPS, for a
+  before/after claim;
+- if an absolute FPS is needed, measure it on a quiet machine and say the number is
+  machine-state dependent;
+- the FPS column of the end-to-end table above is kept as the record of what was
+  measured, but must not be read as a precise figure.
+
+This is the third error of the same family in this task -- the n=2 "median", the
+load-polluted A/B, and now the unstable absolute FPS. The common root is treating one
+short observation as a measurement instead of establishing repeatability first.
+
+Artifacts: none for this step -- the partition change is geometry-identical, so the
+`pics/task4/L3_means/` renders remain valid for it.
 
 ### Regression check: does this change Task 3's results?
 
