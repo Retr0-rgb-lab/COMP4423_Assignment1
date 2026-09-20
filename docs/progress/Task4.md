@@ -81,12 +81,42 @@ Level 1's requirement (camera capture + display) is met, and it is met honestly:
 full pipeline, no caching, no approximation, every stage timed. Keys: `q`/ESC
 quit, `s` snapshot to `pics/task4/`, `p` pause, `r` reset the timer.
 
+Evidence: `code/pics/task4/L1_baseline/frame0001_input.png` and
+`frame0001_render.png` (one camera frame, saved as a before/after pair via
+`--save-render`).
+
+**Render verified programmatically** (the display could not be inspected visually
+in this session, so the PNG was checked numerically instead):
+
+| Check | Result | Meaning |
+|---|---|---|
+| shape | (480, 640, 3) uint8, same as input | no resize/crop surprise |
+| distinct colours | **17** | exactly K=16 palette + 1 border colour |
+| border colour present | `(60,60,60)`, 72480 px (23.6%) | boundaries drawn as the PDF permits |
+| palette luminance range | `(22,23,27)` → `(253,249,249)` | full dark-to-bright span |
+| palette hue spread | e.g. `(34,41,65)`, `(72,65,119)`, `(64,37,25)` | genuinely multi-colour with hue, not a grey ramp |
+| render std vs input std | 66.4 vs 68.2 | overall contrast preserved, not washed out |
+
+The 23.6% border coverage is worth keeping in mind: the drawn boundaries are the
+single most common colour in the output, so they measurably affect any metric
+computed against the render (which is why `brick_render.render_triangles`
+documents them).
+
 **Known defect found and fixed during this stage:** the HUD's FPS first read its
 timestamp immediately after `cap.read()`, so it reported the camera's read rate
 (~33–41 FPS) no matter how slow the pipeline was — the single most misleading
 number the HUD could show, and one that would have been quoted in the report.
 The timestamp is now taken after all per-frame work, so the HUD, the headless
 log and this table all measure the full loop period.
+
+**Path convention gotcha (bit me once):** the built-in defaults are
+`__file__`-relative so they work from any directory, but a user-supplied
+`--snapshot-dir` / `--save-render` / `--output` is resolved against the *current
+directory*. Running from the repo root and passing `pics/task4/...` therefore
+created a `pics/` directory at the repo root, violating "all images live under
+`code/pics/`". Either run from the repo root and pass full `code/pics/...` paths
+(the convention the Task 2/3 docs already use), or pass an absolute path. The
+help text now says so.
 
 ## Plan
 

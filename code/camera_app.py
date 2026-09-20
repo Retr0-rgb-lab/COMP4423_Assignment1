@@ -9,28 +9,27 @@ Level 1 of Task 4 is: camera capture + display of the triangle-brick result. Thi
 driver does exactly that and nothing more, on purpose -- it is the honest
 baseline that the Level 4 before/after comparison is measured against, so it
 runs the FULL Task 3 pipeline on every frame with no caching and no
-approximation. Expect it to be slow (~0.5 FPS at 640x480, 9990 triangles); that
+approximation. Expect it to be slow (~0.45 FPS at 640x480, 9990 triangles); that
 slow number is the deliverable, not a bug.
 
-Per frame:
-    read -> (resize) -> partition -> leaves->triangles -> means -> palette
-         -> quantize -> render -> HUD -> display
+Per frame: read -> (resize) -> partition -> triangles -> means -> palette ->
+quantize -> render -> HUD. Each stage is timed with `brick_io.StageTimer` and the
+per-stage median is printed at exit, so the HUD and the report's before/after
+table come from ONE measurement path (see docs/progress/Task4.md).
 
-Every stage is timed with `brick_io.StageTimer`, and the median per stage is
-printed at exit. The HUD and the report's before/after table therefore come from
-one identical measurement path -- see docs/progress/Task4.md for the recorded
-baseline.
+Defaults mirror the Task 3 "best config" (quadtree, S_max=32, K=16, kmeans_lab,
+Delta-MSE priority), so the report can say Task 4 drives the same pipeline from a
+camera instead of a file.
 
-Config defaults mirror the Task 3 "best config" (quadtree, S_max=32, K=16,
-kmeans_lab, Delta-MSE priority) so the report can state that Task 4 drives the
-same pipeline from a camera instead of a file.
+Usage (Windows venv; WSL has no display, so use --no-show there):
+    python code\\camera_app.py                            # live window
+    python code\\camera_app.py --scale 0.5 --budget 3000
+    python code\\camera_app.py --no-show --max-frames 30   # benchmark
+Note: the built-in defaults are `__file__`-relative, but any path you PASS is
+resolved against the current directory. Run from the repo root and pass
+`code/pics/task4/...` to keep images where AGENTS 1.1 requires them.
 
-Usage (Windows venv; WSL has no display, use --no-show there):
-    ..\\venv\\Scripts\\python code\\camera_app.py
-    ..\\venv\\Scripts\\python code\\camera_app.py --scale 0.5 --budget 3000
-    ..\\venv\\Scripts\\python code\\camera_app.py --no-show --max-frames 30
-
-Keys: q or ESC quit, s snapshot to pics/task4/, p pause, r reset the timer.
+Keys: q or ESC quit, s snapshot, p pause, r reset the timer.
 """
 import argparse
 import os
@@ -291,7 +290,11 @@ def main():
     p.add_argument("--palette", dest="palette_method",
                    choices=["kmeans_lab", "kmeans_rgb", "median_cut"],
                    default="kmeans_lab")
-    p.add_argument("--snapshot-dir", default=DEFAULT_SNAPSHOT_DIR)
+    p.add_argument("--snapshot-dir", default=DEFAULT_SNAPSHOT_DIR,
+                   help="where 's' writes snapshots")
+    p.add_argument("--save-render", metavar="DIR", default=None,
+                   help="save frame 1 as <DIR>/frame0001_{input,render}.png and "
+                        "exit; works headless (how Task 4's evidence is made)")
     p.add_argument("--max-frames", type=int, default=0,
                    help="stop after N frames (0 = run until quit); for benchmarks")
     p.add_argument("--no-show", action="store_true",
@@ -350,6 +353,19 @@ def main():
             fps = 0.8 * fps + 0.2 * (1.0 / dt) if fps else 1.0 / dt
 
             n_frames += 1
+            if args.save_render:
+                # Save the ORIGINAL frame next to the render on purpose: the
+                # report's "real-world scenario" figures need the before/after
+                # pair, and a render alone cannot show what the bricks replaced.
+                # Input is the resized frame actually processed, so the two
+                # images are pixel-aligned and directly comparable.
+                processed = frame
+                save_png(os.path.join(args.save_render, "frame0001_input.png"),
+                         processed)
+                save_png(os.path.join(args.save_render, "frame0001_render.png"),
+                         canvas)
+                print(f"[task4] saved input+render -> {args.save_render}")
+                break
             if not args.no_show:
                 draw_hud(canvas, fps, info, cfg, paused, timer)
                 cv2.imshow(WINDOW, canvas)
