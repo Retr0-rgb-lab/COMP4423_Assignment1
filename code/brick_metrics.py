@@ -50,20 +50,17 @@ from brick_geom import MAX_TRIANGLES
 def _ssim_window(shape):
     """Largest odd SSIM window (<= 7) that still fits inside `shape`.
 
-    Function
-    --------
-    skimage's SSIM rejects an even window, and rejects a window larger than the
-    image. Both callers below need exactly that clamp, so this is the single
-    place the rule lives; they differ only in what happens when NO valid window
-    exists -- `compute_metrics` raises, `multi_scale_ssim` stops descending.
-
+    Function: skimage rejects an even window and one larger than the image, and
+    both callers below need exactly that clamp -- so the rule lives here once.
+    They differ only in the no-valid-window case: `compute_metrics` raises,
+    `multi_scale_ssim` stops descending.
     Shape: `shape` is any shape tuple; only the last two entries are read, so
     `img.shape` on an (H, W, 3) array is accepted directly. Returns an int, or
-    None when `min(H, W) < 3` (no odd window >= 3 can fit).
-    Semantics: the result is `min(7, m)` for odd `m` and `min(7, m - 1)` for even
-    `m`, where `m = min(H, W)`. For any image at least 9 px on its short side
-    that is exactly 7 -- i.e. bit-identical to what both callers computed before
-    this helper existed, so no recorded Task 2/3 number changes.
+    None when the short side is < 3 (no odd window >= 3 can fit).
+    Semantics: `min(7, m)` for odd `m`, `min(7, m - 1)` for even `m`, where
+    `m = min(shape[-2:])`. Any image at least 9 px on its short side gives 7 --
+    bit-identical to what both callers computed before this helper existed, so no
+    recorded Task 2/3 number changes.
     """
     m = min(shape[-2], shape[-1])
     if m < 3:
@@ -76,10 +73,10 @@ def multi_scale_ssim(img, canvas, levels=4):
 
     Function
     --------
-    Convert both images to grayscale, then loop up to `levels` times: score
-    the current pair, then halve both with `cv2.pyrDown` and score again.
-    Averaging across scales rewards structure that survives downsampling, so
-    this is less fooled by fine misalignment than single-scale SSIM.
+    Convert both images to grayscale, then loop up to `levels` times: score the
+    current pair, halve both with `cv2.pyrDown`, score again. Averaging across
+    scales rewards structure that survives downsampling, so this is less fooled
+    by fine misalignment than single-scale SSIM.
 
     Shapes
     ------
@@ -103,11 +100,10 @@ def multi_scale_ssim(img, canvas, levels=4):
     sizes without checking that both got the full 4 levels.
 
     Window convention: shared with `compute_metrics` via `_ssim_window`, so the
-    file no longer has two different small-image rules. The one behaviour change
-    from unifying them: a level exactly 3 px across (m=3) now gets scored with
-    win=3 instead of being skipped, because 3 is a legal window that the old
-    `min(7, m - 1)` rule threw away as even (m-1 = 2). Unreachable from the
-    images used in Tasks 2-3 (the pyramid starts at m >= 37).
+    file has one small-image rule rather than two. Only behaviour change from
+    unifying them: a level exactly 3 px across now scores with win=3 instead of
+    being skipped, because the old `min(7, m - 1)` rule discarded 3 as even.
+    Unreachable from the Task 2-3 images (the pyramid starts at m >= 37).
     """
     g_orig = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float64)
     g_out = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY).astype(np.float64)
@@ -166,27 +162,26 @@ def edge_f1(img, canvas, sigma=2.0, tolerance=3):
 
     Function
     --------
-    Plain pixel-exact edge comparison is useless here: a triangle boundary
-    can sit 1 pixel off a true edge and still look aligned. So each edge map
-    is DILATED by `tolerance` pixels and an edge pixel counts as matched if it
-    falls inside the other map's dilated version.
+    Plain pixel-exact edge comparison is useless here: a triangle boundary can
+    sit 1 pixel off a true edge and still look aligned. So each edge map is
+    DILATED by `tolerance` pixels and an edge pixel counts as matched if it falls
+    inside the other map's dilated version.
 
-    READ THIS BEFORE QUOTING THE NUMBERS -- precision and recall are NOT
-    computed on the same pair of sets, so this is not textbook P/R:
+    READ BEFORE QUOTING THE NUMBERS -- precision and recall use DIFFERENT
+    reference sets, so this is not textbook P/R:
 
         precision = |out edges near a source edge| / |all out edges|
         recall    = |source edges near an out edge|  / |all source edges|
 
-    i.e. precision answers "how much of what we drew is real?", recall answers
-    "how much of the real structure did we draw?". Each uses the OTHER map's
-    dilation as its reference. `tolerance` is one-sided per direction (it does
-    not add to make a 2*tolerance band), which slightly under-reports matches
-    for edges that are near but outside the band.
+    i.e. precision asks "how much of what we drew is real?", recall asks "how
+    much of the real structure did we draw?". Each uses the OTHER map's dilation
+    as its reference. The dilation is one-sided, so a match just outside the band
+    is missed by both directions.
 
-    Edge case: a blank canvas makes `e_out` empty, so precision = 0/1 = 0 and
-    recall = 0. All denominators use `max(..., 1)` / `max(..., 1e-9)` so no
-    division by zero, but `f1` is then 0 rather than undefined -- take the
-    "0 means 'no edges drawn'", not "0 means 'maximally wrong'".
+    Edge case: a blank canvas empties `e_out`, giving precision = 0/1 = 0 and
+    recall = 0. The `max(..., 1)` guards prevent division by zero, so `f1` is 0
+    rather than undefined -- read that as "nothing was drawn", not "maximally
+    wrong".
 
     Shapes
     ------
@@ -228,16 +223,15 @@ def edge_preservation_index(img, canvas):
 
     Function
     --------
-    Computes the Sobel gradient magnitude of both images, mean-centres each
-    field, then takes the Pearson correlation coefficient of the pair. It
-    measures whether strong edges in the mosaic fall WHERE the source has
-    strong edges, ignoring overall intensity -- which is why it is reported
-    as a signed score and can be ~0 or negative even on a decent mosaic.
+    Takes the Sobel gradient magnitude of both images, mean-centres each field,
+    then computes the Pearson correlation of the pair. It measures whether strong
+    edges in the mosaic land WHERE the source has strong edges, ignoring overall
+    intensity -- which is why it is a signed score that can be ~0 or negative
+    even on a decent mosaic.
 
-    DEPENDENCY-SPECIFIC NAME: "EPI" is local to this project. It is a plain
-    Pearson correlation of Sobel magnitudes, NOT the classic
-    Edge-Preservation-Index from the image-fusion literature. Define it
-    explicitly wherever the report cites it.
+    NAME IS LOCAL: "EPI" here is a plain Pearson correlation of Sobel magnitudes,
+    NOT the classic Edge-Preservation-Index from the image-fusion literature.
+    Define it explicitly wherever the report cites it.
 
     Shapes
     ------
@@ -268,13 +262,13 @@ def quantization_error(means_bgr, labels, palette_bgr):
     Function
     --------
     Isolates the COLOUR-QUANTISATION half of the pipeline from the geometry
-    half: it never looks at the rendered image, only at whether each triangle
-    ended up with a palette colour close to the colour it wanted. A high
-    Quant_Error with a good PSNR means the geometry is fine but the palette
-    cannot represent the image (too few colours / badly placed centroids).
+    half: it never looks at the rendered image, only at whether each triangle got
+    a palette colour close to the one it wanted. A high Quant_Error with a good
+    PSNR means the geometry is fine but the palette cannot represent the image
+    (too few colours / badly placed centroids).
 
-    Measured in CIEDE2000, matching `delta_e_2000_full`, so the two are
-    directly comparable -- unlike PSNR (BGR pixel space) which is not.
+    Measured in CIEDE2000, matching `delta_e_2000_full`, so the two are directly
+    comparable -- unlike PSNR (BGR pixel space) which is not.
 
     Shapes
     ------
@@ -340,10 +334,9 @@ def compute_metrics(img, canvas, means_bgr, labels, palette_bgr, n_triangles,
 
     Function
     --------
-    Thin orchestration: every metric below is computed by its own function,
-    plus the two shapes that metric needs (grayscale / Lab) are derived
-    inside those functions. This function only decides WHICH metrics run and
-    packages the results. Returns the 13-key dict documented in the module
+    Thin orchestration: each metric is computed by its own function, including
+    the grayscale / Lab conversions it needs. This function only decides WHICH
+    metrics run and packages them into the 13-key dict documented in the module
     docstring.
 
     Shapes
@@ -353,29 +346,25 @@ def compute_metrics(img, canvas, means_bgr, labels, palette_bgr, n_triangles,
       means_bgr   : (T, 3) float32 -- per-triangle mean colour; `[:, 0]=B`.
       labels      : (T,) int -- `labels[i]` = palette index of triangle i.
       palette_bgr : (K, 3) uint8 -- `palette_bgr[k]` = colour of index k.
-      n_triangles : int -- for Budget_Util / N_Triangles. NOTE: this is passed
-                    in rather than derived, so a caller that slices `means` /
-                    `labels` can still report the true triangle count (the
-                    Task 3 driver does exactly that).
-      elapsed_s   : float -- seconds for whatever interval the CALLER chose.
-                    Only used for FPS; see the module-level FPS caveat.
+      n_triangles : int -- for Budget_Util / N_Triangles. Passed in rather than
+                    derived, so a caller that slices `means` / `labels` can still
+                    report the true triangle count (the Task 3 driver does).
+      elapsed_s   : float -- seconds for whatever interval the CALLER chose; only
+                    used for FPS (see the module-level FPS caveat).
     Intermediate:
-      win : int -- SSIM window for the whole image, from the shared
-            `_ssim_window` helper (odd, <= 7, fits the image). For any image at
-            least 9 px on its short side this is 7, so the value -- and hence
-            every recorded SSIM -- is unchanged from before the helper existed.
+      win : int -- SSIM window for the whole image, from `_ssim_window`. Any image
+            at least 9 px on its short side resolves to 7, so every recorded
+            SSIM is unchanged from before the helper existed.
     Output:
-      dict -- 12 numeric fields + "Heatmap" (H, W, 3). Keys:
-              PSNR, SSIM, MS-SSIM, Delta_E_2000, Edge_F1, Edge_Precision,
-              Edge_Recall, EPI, Quant_Error, Budget_Util, N_Triangles, FPS,
-              Heatmap.
+      dict -- 12 numeric fields + "Heatmap" (H, W, 3). Keys: PSNR, SSIM,
+              MS-SSIM, Delta_E_2000, Edge_F1, Edge_Precision, Edge_Recall, EPI,
+              Quant_Error, Budget_Util, N_Triangles, FPS, Heatmap.
 
     Raises:
-      ValueError -- when `min(H, W) < 3`, i.e. no valid SSIM window exists.
-      Previously this case crashed inside skimage with an opaque window-size
-      error, because the old code forced a window of 3 onto an image that could
-      not hold one. Failing explicitly is the fix; SSIM is simply undefined for
-      images under 3 px on a side.
+      ValueError -- when `min(H, W) < 3`, i.e. no valid SSIM window exists. This
+      used to crash inside skimage with an opaque window-size error, because the
+      old code forced a window of 3 onto an image that could not hold one. SSIM
+      is simply undefined below 3 px on a side, so failing explicitly is the fix.
     """
     H, W = img.shape[:2]
     psnr = float(peak_signal_noise_ratio(img, canvas, data_range=255))
