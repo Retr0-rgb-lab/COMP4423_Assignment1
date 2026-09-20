@@ -1,5 +1,39 @@
 # Task 4: Real-world camera → triangle-brick display (25 marks)
 
+## Status snapshot
+
+| Level | Marks | State |
+|---|---|---|
+| 1 — camera capture + display | 10 | **done**. `camera_app.py` opens the real camera (640×480, CAP_DSHOW), renders the full Task 3 pipeline per frame, and shows the source and the render side by side in a resizable window that closes on its X. Verified: camera opens, 8–30 frame headless runs complete, Task 2 re-run reproduces byte-identical PNGs. |
+| 2 — different content | 15 | **not started**. Needs several physical scenes; a `--snapshot-dir` + `s` capture path exists, no named-scene flow yet. |
+| 3 — real-time (chosen option) | 20 | **in progress**. Mean-colour stage done (`brick_means.py`); it also uncovered a real defect in the shipped pipeline. `quadtree_partition` is now the bottleneck at ~82% of the frame. |
+| 4 — before/after comparison | 25 | **not started**, but every change so far is being measured in the form it needs: same frame, 5-frame runs, FPS plus ΔE2000/PSNR against the source. |
+
+Measured so far (640×480, 9990 triangles, same camera frame, through the app's own
+benchmark mode):
+
+| Stage / change | Frame FPS | Stage ms | ΔE2000 vs source |
+|---|---|---|---|
+| baseline (`--means mask`) | 0.41 | means 1716 | 9.947 |
+| + corrected means (`--means fast`) | 1.35 | means 21 | **8.633** |
+| + sampled means (`--means sample`) | 1.47 | means 5 | 10.244 |
+
+Refinement ladder available today, full resolution: 2000 bricks → 3.22 FPS,
+5000 → 2.01 FPS, 9990 → 1.38 FPS.
+
+Two things are deliberately left UNFIXED because they are Level 4 material —
+each is a measured problem with a known fix, which is exactly what the level
+asks for:
+1. the per-frame K-Means palette is re-seeded only once at startup, so the palette
+   changes every frame even for a static scene (measured: per-channel drift up to
+   207/255 across 5 calls on identical input; re-seeding per call makes all 5
+   identical);
+2. the `quadtree_partition` cost, addressed next.
+
+Also still open and NOT to be reported as verified: no second machine, one camera,
+and the display has never been inspected by eye in this session (it cannot show
+images), so all render checks are numeric.
+
 ## Goal (from assignment PDF)
 
 > Task 4*: Implement and test the program in a **real-world scenario**. Call the
