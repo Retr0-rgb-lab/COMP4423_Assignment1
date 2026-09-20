@@ -157,6 +157,30 @@ measurement so the Level 4 table is built from real numbers as we go.
 - `python code/camera_app.py` — the live window (must be run on the desktop;
   WSL has no display).
 
+## Open questions to investigate before the Level 3 work
+
+**`build_palette` cost is not understood yet, and it is not monotone in the
+triangle count.** Observed medians for `K=16, kmeans_lab`:
+
+| Setting | Triangles | `build_palette` median |
+|---|---|---|
+| 640×480, scale 1.0, budget 9990 | 9990 | 24.6 ms (mean 105 ms — one ~660 ms warm-up frame) |
+| 320×240, scale 0.5, budget 2000 | 1996 | 324 ms |
+| 320×240, scale 0.5, budget 1500 | 1498 | 297 ms |
+
+So the stage got ~12× slower while the number of colours to cluster dropped ~6×.
+Whatever the cause, it is not "more points, more time", so the optimization plan
+should not assume `build_palette` is cheap just because it is cheap in the
+full-budget case. Candidate explanations to test (not yet tested): OpenCV's
+K-Means++ init with `attempts=10` converging slowly on data with many duplicate
+means (a small budget on a downscaled frame produces large flat regions), or
+cluster re-seeding when clusters empty out. Do not write an explanation into the
+report until it is measured — the first hypothesis tried is rarely the right one.
+
+Consequence for the plan: the palette EMA / geometry reuse optimization may matter
+more than expected at the smaller budgets a real-time mode would use, and
+`build_palette` needs its own micro-benchmark before and after that change.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.

@@ -79,11 +79,28 @@ class StageTimer:
     """
 
     def __init__(self):
+        """Create an empty timer.
+
+        Shape/semantics: `self.samples` starts as an empty
+        `defaultdict(list)` -- semantically a map from stage NAME to the list of
+        elapsed seconds recorded for it, so it is empty until a `stage()` block
+        completes. The defaultdict is what lets callers register a new stage just
+        by naming it in `stage()`, with no declaration step.
+        """
         self.samples = defaultdict(list)
 
     @contextmanager
     def stage(self, name):
-        """Time the enclosed block and record it under `name`."""
+        """Time the enclosed block and record it under `name`.
+
+        Shape/semantics: `name` is the str key; on block exit ONE float is
+        appended to `self.samples[name]`, its value being the wall-clock seconds
+        spent inside the block. Semantics caveat: the recording happens in a
+        `finally`, so the duration is recorded even if the block raises -- the
+        elapsed time of a FAILED frame is still counted. Entering the same
+        `name` twice in one iteration therefore appends two samples for what the
+        caller may consider one frame.
+        """
         t0 = time.perf_counter()
         try:
             yield
@@ -91,12 +108,24 @@ class StageTimer:
             self.samples[name].append(time.perf_counter() - t0)
 
     def reset(self):
-        """Drop all samples, keeping the stage names that were registered."""
+        """Drop all samples, keeping the stage names that were registered.
+
+        Shape/semantics: `self.samples` becomes empty; it stays a
+        `defaultdict(list)`, so previously seen stage names need no
+        re-registration and `report()` on a freshly reset timer returns only the
+        `__total__` row with zero counts.
+        """
         self.samples.clear()
 
     @staticmethod
     def _median(values):
-        """Median without a numpy dependency, so this stays pure stdlib."""
+        """Median of a 1-D sequence of floats, without a numpy dependency.
+
+        Shape: a 1-D sequence in, one float out. Semantics: for an even-length
+        input the result is the MEAN of the two central values, so it need not be
+        an element of the input; an empty input returns 0.0 instead of raising,
+        which is what lets `report()` be called before any frame completes.
+        """
         s = sorted(values)
         n = len(s)
         if n == 0:
