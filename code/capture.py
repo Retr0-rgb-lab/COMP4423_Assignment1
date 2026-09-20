@@ -13,6 +13,17 @@ INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jp
 
 
 def main():
+    """Read one image and display it in a window; any key closes it.
+
+    Shape: the loaded image is (H, W, 3) uint8 BGR and is passed straight to
+    `cv2.imshow`; no array is returned. Semantics: the optional first CLI
+    argument is the image path, defaulting to `pics/sky.jpg` next to this file.
+    Raises `FileNotFoundError` when `cv2.imread` returns None (a missing file and
+    an unreadable file are indistinguishable at this API, hence the single
+    error). `cv2.waitKey(0)` blocks forever until a key is pressed WHILE THE
+    WINDOW HAS FOCUS -- on a headless host (WSL, CI) or if the window opens
+    behind another, this appears to hang rather than fail.
+    """
     path = sys.argv[1] if len(sys.argv) > 1 else INPUT
     img = cv2.imread(path)                       # BGR ndarray
     if img is None:

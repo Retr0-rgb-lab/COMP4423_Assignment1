@@ -30,7 +30,9 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from brick_geom import quadtree_partition, region_merge_partition, pad_to_max, leaves_to_triangles  # noqa
+from brick_geom import pad_to_max, leaves_to_triangles  # noqa
+from brick_quadtree import quadtree_partition  # noqa
+from brick_region_merge import region_merge_partition  # noqa
 from brick_render import triangle_means_bgr, render_triangles  # noqa
 from brick_color import build_palette, quantize_nearest_bgr  # noqa
 from brick_metrics import compute_metrics  # noqa
@@ -50,6 +52,37 @@ OTHERS = [
 
 
 def run(img, partition, s_set, k, palette_method):
+    """Run one full config end to end and return its render, metrics and sizes.
+
+    Function: the whole Task 3 pipeline for a single configuration, inlined here
+    rather than imported from `triangle_brick_task3` so this script stays a
+    standalone reproducer for the figures the report cites. Steps: partition ->
+    2 triangles per cell -> per-triangle means (on the padded image) -> palette ->
+    nearest-colour assignment -> render -> metrics.
+
+    Shapes
+    ------
+    Input:
+      img            : (H, W, 3) uint8 BGR.
+      partition      : "quadtree" | "region_merge".
+      s_set          : list[int] -- allowed cell sizes, powers of two.
+      k              : int -- palette size.
+      palette_method : "kmeans_lab" | "kmeans_rgb" | "median_cut".
+    Intermediate:
+      leaves : list of (x, y, size) in padded coords; `n_tri = 2*len(leaves)`.
+      means  : (n_tri, 3) float32, `means[i, 0]=B`.
+      pal    : (k, 3) uint8 BGR.
+      labels : (n_tri,) uint8 -- `labels[i]` = palette index of triangle i.
+    Output:
+      (canvas (H, W, 3) uint8 BGR, metrics dict, sizes dict). `sizes` maps cell
+      side -> number of CELLS of that side (not triangles; multiply by 2, or
+      prefer metrics["counts_per_K"] for triangle counts). `metrics` is the
+      `compute_metrics` dict plus N_Triangles.
+
+    Side effect: this function does NOT seed the RNG -- `main` calls
+    `cv2.setRNGSeed(0)` before each invocation, deliberately, so the seeding
+    sits next to the loop that needs it.
+    """
     t0 = time.time()
     if partition == "quadtree":
         leaves, ps, osz = quadtree_partition(img, s_set, BUDGET, "mse")
@@ -70,6 +103,19 @@ def run(img, partition, s_set, k, palette_method):
 
 
 def report(name, m, sizes):
+    """Print one aligned metrics line for a run (console evidence trail).
+
+    Function: a fixed-width one-liner so several runs can be compared by eye in
+    the terminal, and so the numbers quoted in docs/progress/Task3.md can be
+    traced back to a run. `dE` here is Delta_E_2000 (ASCII spelling because the
+    console is not guaranteed UTF-8).
+
+    Shape: no arrays. Semantics: `m` is a `compute_metrics` dict and is read for
+    N_Triangles / SSIM / PSNR / Delta_E_2000 / Edge_F1 / EPI only; `sizes` maps
+    cell side -> cell count and is printed sorted ascending, so the printed
+    `sizes=` shows the final size MIX, which is the evidence for the
+    quadtree-vs-region_merge argument in the module docstring.
+    """
     print(f"{name:32s} n_tri={m['N_Triangles']:.0f} "
           f"SSIM={m['SSIM']:.4f} PSNR={m['PSNR']:.2f} "
           f"dE={m['Delta_E_2000']:.3f} EdgeF1={m['Edge_F1']:.4f} "
@@ -77,6 +123,25 @@ def report(name, m, sizes):
 
 
 def main():
+    """Render the chosen config plus its two rivals, and write the comparison art.
+
+    Function: runs `BEST` followed by `OTHERS` (3 configs, same image, same
+    budget), seeds cv2 before each so the K-Means palettes are reproducible, then
+    builds a 4-tile compare grid (original + 3 renders) and writes everything
+    into `pics/task3/best/`.
+
+    Shapes: input image is (H, W, 3) uint8 BGR; the compare grid is
+    `(2*(H+40) + 3*16, 2*W + 3*16, 3)` uint8 BGR. Semantics: the grid's caption
+    per tile prints the run name plus Delta_E_2000 / SSIM / Edge_F1, which are
+    the three numbers the report's "why quadtree" argument rests on.
+
+    Timing note: the FPS recorded for each run comes from `run`'s own `t0`
+    (partition + means + palette + render; metrics excluded), same caveat as the
+    other drivers -- see the FPS caveat in brick_metrics.
+
+    Outputs: `best_config.png` (the chosen render alone, the canonical artifact),
+    one `<name>.png` per config, and `best_compare.png`.
+    """
     os.makedirs(OUT_DIR, exist_ok=True)
     img = cv2.imread(DEFAULT_INPUT)
 

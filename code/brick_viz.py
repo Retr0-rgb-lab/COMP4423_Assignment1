@@ -19,7 +19,29 @@ METHOD_COLORS = {"otsu": "#4C72B0", "kmeans": "#DD8452", "fixed": "#55A467"}
 # ---------------------------------------------------------------------------
 
 def make_compare_grid(img, results):
-    """2x2 grid: original + up to 3 results, with key-metric labels."""
+    """2x2 montage: the original plus up to three renders, each captioned.
+
+    Function: builds one image a report reader can compare at a glance, by
+    pasting each canvas into a gray grid cell and printing the key metrics
+    underneath it. Captions are drawn with `cv2.putText` on the grid buffer (not
+    matplotlib) so the output is a plain PNG with no dependency on a font file
+    being present.
+
+    Shape: `img` (H, W, 3) uint8; output is
+    `(2*(H+label_h) + 3*pad, 2*W + 3*pad, 3)` uint8, with `label_h=44`,
+    `pad=20`. Semantics: `results` is a list of `(name, metrics_dict)` pairs
+    where `metrics_dict["_canvas"]` (H, W, 3) is the render to paste and the
+    metric keys are only read for the caption text.
+
+    Preconditions / gotchas:
+      * Only the FIRST three entries are drawn (`results[:3]`); a fourth is
+        silently dropped, so this is a 4-up helper, not an N-up one.
+      * Every `_canvas` must be exactly (H, W, 3). The slice assignment will
+        raise on a size mismatch, which is the intended behaviour -- a silently
+        rescaled comparison would be misleading.
+      * `_canvas` is stashed inside the metrics dict by the driver
+        (`triangle_brick.run_compare`) rather than passed separately.
+    """
     H, W = img.shape[:2]
     pad = 20
     label_h = 44
@@ -45,7 +67,29 @@ def make_compare_grid(img, results):
 
 
 def make_residual_panel(heatmaps, names):
-    """Single column of stacked residual heatmaps with labels."""
+    """Single column of stacked residual heatmaps, one per run, captioned.
+
+    Function: puts the per-run error maps in one image so the report can show
+    "where each method is wrong" side by side vertically. Assumes all maps come
+    from the same source image, which is what makes them worth stacking.
+
+    Shape: `heatmaps` is a list of N arrays, each (H, W, 3) uint8 BGR (from
+    `brick_metrics.make_residual_heatmap`). Output is
+    `(N*(H+label_h) + (N+1)*pad, W + 2*pad, 3)` uint8 BGR, with `label_h=36`,
+    `pad=16`.
+
+    Preconditions / gotchas:
+      * H and W are taken from `heatmaps[0]` alone -- every other map must match
+        exactly or the slice assignment raises. Mixed-size input is a caller bug,
+        not something this function rescales.
+      * `names` must be the same length as `heatmaps`; `zip` silently truncates
+        to the shorter of the two, so a wrong-length name list loses captions
+        instead of erroring.
+      * The colour scale of each tile is INDEPENDENT -- each heatmap was
+        normalised to its own maximum upstream, so a red patch in tile 1 and one
+        in tile 2 do not represent equally large errors. Read this figure as
+        "where", not "how much"; use the numeric Delta_E_2000 for magnitude.
+    """
     H, W = heatmaps[0].shape[:2]
     pad = 16
     label_h = 36
@@ -66,7 +110,34 @@ def make_residual_panel(heatmaps, names):
 # ---------------------------------------------------------------------------
 
 def make_metrics_bar_chart(metrics_by_method):
-    """Two-subplot bar chart for the Task 2 three-method comparison."""
+    """Two-panel bar chart for the Task 2 three-method comparison.
+
+    Function: the metrics have incompatible scales and directions, so they are
+    split into two panels rather than one -- left: the bounded [0, 1] metrics
+    where HIGHER is better (comparable on a shared 0..1.05 axis); right: the
+    unbounded metrics where LOWER is better (each bar labelled with its value).
+    Putting them on one axis would make PSNR's ~17 dB dwarf SSIM's 0.4 and hide
+    the comparison this chart exists to make.
+
+    Shape: returns a matplotlib `Figure` with axes (1, 2), figsize (13, 5). The
+    function does NOT save or close -- the caller owns that, so the same figure
+    can be written at different DPIs.
+
+    Semantics of `metrics_by_method`: dict `{method_name -> metrics_dict}`,
+    where each inner dict is a `brick_metrics.compute_metrics` result. Bar
+    height for panel-left = `metrics[metric_key]` for the keys in `higher`;
+    panel-right likewise for `lower`.
+
+    Preconditions / gotchas:
+      * Panel-left assumes all four `higher` keys are already in [0, 1]; EPI can
+        be NEGATIVE in principle (it is a correlation), which would render below
+        the axis floor. On the images tested so far it is positive.
+      * `METHOD_COLORS` must contain every method name in `metrics_by_method` or
+        this raises KeyError -- intentional, so a new method cannot be plotted
+        in a colour that clashes with an existing series.
+      * Both panels read the metric keys by name; a missing key is a KeyError
+        rather than a blank bar.
+    """
     higher = ["SSIM", "MS-SSIM", "Edge_F1", "EPI"]
     lower = [("PSNR", "PSNR (dB)"), ("Delta_E_2000", "ΔE2000"),
              ("Quant_Error", "Quant Error (ΔE)")]
@@ -111,7 +182,31 @@ def make_metrics_bar_chart(metrics_by_method):
 
 
 def make_sweep_bar_chart(metrics_list, title="Task 3 experiment grid"):
-    """Two-subplot bar chart across N experiment runs (Task 3 summary)."""
+    """Two-panel bar chart across N Task 3 experiment runs.
+
+    Function: same two-panel split as `make_metrics_bar_chart` (bounded
+    higher-is-better on the left, unbounded lower-is-better on the right), but
+    across RUNS instead of across methods -- used for the Task 3 summary so all
+    15 configurations can be eyeballed on one figure. Bar width shrinks as
+    `0.8/n` so every run gets a slot, and the figure widens with `n`.
+
+    Shape: returns a matplotlib `Figure` with axes (1, 2),
+    figsize `(max(12, n*0.6), 5)`. Not saved or closed here -- the caller does.
+
+    Semantics of `metrics_list`: a list of `brick_metrics.compute_metrics`
+    result dicts, one per run. Each MUST carry the string keys `"group"` and
+    `"name"` (added by the Task 3 driver) because the legend label is derived as
+    `"A:k04"` from `group.split("_")[0]` plus `name`.
+
+    Preconditions / gotchas:
+      * A run dict missing `"group"` or `"name"` raises KeyError; these are the
+        only non-metric keys this function depends on.
+      * The legend is drawn inside the axes with `ncol=2`, so past roughly 20
+        runs it starts overlapping the bars -- split the sweep into two figures
+        beyond that.
+      * With more than 20 runs `plt.cm.tab20` repeats colours, making two runs
+        look identical in the legend.
+    """
     higher_keys = ["SSIM", "MS-SSIM", "Edge_F1", "EPI"]
     lower_keys = [("PSNR", "PSNR (dB)"), ("Delta_E_2000", "ΔE2000"),
                   ("Quant_Error", "Quant Error (ΔE)")]
@@ -152,7 +247,25 @@ def make_sweep_bar_chart(metrics_list, title="Task 3 experiment grid"):
 
 
 def plot_size_histogram(leaves, save_path):
-    """Bar chart of triangle count per cell size."""
+    """Bar chart of triangle count per cell size; saves a PNG and closes the fig.
+
+    Function: this is the Task 3 deliverable's "count for each brick size", so
+    the title carries the total and every bar is labelled with its own count --
+    the reader should not have to read values off the axis. Because the bars are
+    counts of CELLS multiplied by 2, the chart is already in the unit the
+    assignment grades (triangles), not cells.
+
+    Shape: `leaves` is an iterable of (x, y, size) tuples -- the `(x, y)` part is
+    ignored. Semantics: `counts[s]` accumulates `+2` per cell of side `s`
+    because each square cell is cut into exactly two triangles; the x-axis is
+    `size` (the right-angle leg in pixels) and the y-axis is the triangle count
+    at that size. Writes `save_path` as PNG and returns None (side-effecting, so
+    it must not be used in a notebook without expecting a file on disk).
+
+    Edge case: an empty `leaves` leaves `items` empty and `top` falls back to 1,
+    producing an empty chart rather than raising -- a blank histogram therefore
+    means "no cells", not "plot failed".
+    """
     counts = {}
     for (_, _, s) in leaves:
         counts[s] = counts.get(s, 0) + 2  # 2 triangles per cell
@@ -174,7 +287,30 @@ def plot_size_histogram(leaves, save_path):
 
 
 def plot_palette(palette_bgr, save_path, K):
-    """Swatch row showing palette colours with their BGR values."""
+    """Swatch strip of the palette, each entry labelled with its BGR numbers.
+
+    Function: shows WHICH colours a run actually used and in what order, which
+    is the evidence behind "more than three brick colours" in Task 3 and the only
+    way to see whether a K-Means palette landed where you expected. Saves a PNG
+    and closes the figure (side-effecting).
+
+    Shape: `palette_bgr` is (K, 3) uint8 BGR; the figure is 1 row of K unit-width
+    rectangles with xlim (0, K) and ylim (0, 1) -- i.e. one rectangle per palette
+    index, drawn left to right in palette order. `K` is used for the axis limits
+    and the title, and must match `len(palette_bgr)` or the strip will not fill
+    the axis.
+
+    Semantics: `palette_bgr[i, 0]=B`, `[i, 1]=G`, `[i, 2]=R`; the label under
+    each swatch prints B, G, R top to bottom (the reverse of the tuple order, as
+    a vertically stacked text box). Palette order is significant per method --
+    `brick_color` sorts the Task 2 palettes dark -> bright but leaves the Task 3
+    ones unsorted, so this figure is the reference for what index the labels in
+    other figures refer to.
+
+    Gotcha: label colour is chosen by a crude heuristic -- white text when
+    B+G+R < 200, else black. A mid-brightness swatch (sum just above 200) can
+    therefore get black text on a dark colour and be hard to read. Cosmetic only.
+    """
     fig, ax = plt.subplots(figsize=(max(6, K * 0.6), 1.2))
     for i, color_bgr in enumerate(palette_bgr):
         rgb = (int(color_bgr[2]) / 255, int(color_bgr[1]) / 255,

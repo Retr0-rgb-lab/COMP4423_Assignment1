@@ -27,17 +27,49 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from brick_geom import pad_to_max, _region_mse  # noqa
+from brick_geom import pad_to_max  # noqa
+from brick_quadtree import _region_mse  # noqa
 
 DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jpg")
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "task3", "analysis")
 
 
 def quadtree_with_history(img, S_set, max_triangles):
-    """Run top-down quadtree recording (parent_size, delta_sse) per split.
+    """Run the top-down quadtree, recording (parent_size, benefit) per split.
 
-    Greedy priority = ΔSSE / 6 (higher first). Stops when the next split
-    would exceed max_triangles (or heap empty).
+    Function
+    --------
+    Same greedy rule as `brick_quadtree.quadtree_partition` -- split the highest
+    ΔSSE/6 leaf first -- but it also APPENDS one history row per split. That is
+    the whole point of this copy: the production partitioner throws the
+    rate-distortion trace away, and this analysis needs the trace to answer "how
+    much does the next triangle buy us?". Deliberately duplicated rather than
+    refactored so the shipped partitioner keeps its hot inner loop clean; if the
+    priority rule changes in `brick_quadtree`, this copy must be updated by hand
+    or the two curves stop describing the shipped algorithm.
+
+    Stops when the next split would exceed `max_triangles` (a split adds 6
+    triangles) or the heap empties.
+
+    Shapes
+    ------
+    Input:
+      img           : (H, W, 3) uint8 BGR -- source image.
+      S_set         : list[int] -- allowed cell sizes, powers of two.
+      max_triangles : int -- budget cap for this analysis run.
+    Intermediate:
+      padded : (Hp, Wp, 3) -- reflect-padded to a multiple of max(S_set).
+      leaves : dict {(x, y, size) -> float SSE} in padded coords.
+      heap   : list of `(-ΔSSE/6, leaf, ΔSSE)` -- negated so heapq pops the
+               LARGEST benefit first; the third element carries the raw ΔSSE
+               through to the history without recomputation.
+    Output:
+      (history, start_tri, leaves_keys):
+        history    : list of `(parent_size, ΔSSE/6, ΔSSE)` in SPLIT ORDER, so
+                     index i is the i-th-most-beneficial split. `parent_size` is
+                     the side of the cell that was split, NOT of its children.
+        start_tri  : int -- triangles in the initial coarse grid.
+        leaves_keys: list of (x, y, size) -- final cells.
     """
     padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
@@ -53,6 +85,16 @@ def quadtree_with_history(img, S_set, max_triangles):
     start_tri = n_tri
 
     def priority(x, y, size):
+        """Benefit of splitting the cell at (x, y) with side `size`.
+
+        Shape: three ints in (padded coords), `(benefit, delta_sse)` out, or
+        None when the cell cannot be split. Semantics: `delta_sse` is the raw
+        SSE reduction from replacing this cell by its four children, and
+        `benefit = delta_sse / 6` is that reduction per ADDED triangle (a split
+        costs 6 new triangles). None is returned once `size <= S_min`, which is
+        how the cell-size floor is enforced -- callers must not push None onto
+        the heap (both call sites check).
+        """
         if size <= S_min:
             return None
         half = size // 2
@@ -91,6 +133,35 @@ def quadtree_with_history(img, S_set, max_triangles):
 
 
 def main():
+    """Produce the three rate-distortion figures and the per-size console table.
+
+    Function
+    --------
+    Runs the quadtree ONCE under a deliberately huge budget so the full benefit
+    curve is visible, then derives:
+      1. marginal_benefit_curve.png  -- ΔSSE/triangle vs triangles, log y, with
+         the 9990 assignment budget marked as a vertical line.
+      2. cumulative_benefit_curve.png -- cumulative ΔSSE normalised to 1.0, i.e.
+         the diminishing-returns view.
+      3. benefit_by_size.png         -- mean ΔSSE/triangle grouped by the size of
+         the cell that was split, with n=<splits> labels.
+    Plus a console table of splits / mean benefit / total benefit per size.
+
+    Shapes / semantics: the working arrays are 1-D, length = number of splits.
+    `sizes[i]` = parent size of split i, `marg[i]` = ΔSSE/6 for split i,
+    `dsse[i]` = its raw ΔSSE, and `tri_used[i] = start_tri + 6*(i+1)` -- the
+    triangle count AFTER split i, which is why the arithmetic starts at +6 and
+    not +0. All three figures are drawn against `tri_used`.
+
+    Why BIG=60000: the assignment budget is 9990, but the curves only become
+    informative when allowed to run well past it -- the point of the analysis is
+    where benefit STOPS being worth a triangle, which is not visible if the curve
+    is truncated at the budget. Consequently the x-axis extends beyond 9990 and
+    the 9990 line is an annotation, not a cutoff. Do NOT read anything past the
+    line as achievable under the assignment's <10000 constraint.
+
+    Writes into `pics/task3/analysis/`; returns None (side-effecting).
+    """
     os.makedirs(OUT_DIR, exist_ok=True)
     img = cv2.imread(DEFAULT_INPUT)
     print(f"[marginal] input {DEFAULT_INPUT} shape={img.shape[:2]}")
