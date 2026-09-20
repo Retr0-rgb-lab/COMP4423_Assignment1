@@ -12,6 +12,8 @@ import numpy as np
 from skimage import filters
 
 from brick_geom import MAX_TRIANGLES, pad_to_max
+from brick_sat import (build_sats, rect_sse_total_many,
+                       rect_sobel_var_many)
 
 
 def _region_mse(region):
@@ -94,7 +96,56 @@ def _quadtree_priority(img, leaf, priority):
     return (mse_parent - mse_children) / 6.0  # per new triangle
 
 
-def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse"):
+def _quadtree_priorities_sat(bundle, leaves, priority):
+    """Priorities for a BATCH of leaves, from the integral tables.
+
+    Function
+    --------
+    Same decision rule as `_quadtree_priority`, but the table lookups are issued
+    for the whole batch at once. That batching is the entire point: the scalar
+    version is O(1) in arithmetic yet measured no faster than the original numpy
+    means, because the bottleneck was ~160000 tiny numpy calls, not the maths.
+    Doing one batch per split (4 children) and one for the seed (every S_max cell)
+    turns that into a few thousand numpy calls over arrays.
+
+    Shapes/semantics: `leaves` is an iterable of `(x, y, size)` in padded
+    coordinates; `priority` is "mse" or "edgef1". Returns a (N,) float64 array
+    aligned with `leaves`. For "mse", entry i is the SSE reduction of splitting
+    leaf i divided by the 6 triangles that adds; for "edgef1" it is the variance of
+    the Sobel magnitude over that leaf. Leaves with `size <= 1` get exactly 0.0 and
+    are excluded from the table queries, because a zero-area query would divide by
+    zero -- and 0.0 is also what the reference returns for them, so the two agree.
+    """
+    arr = np.asarray(list(leaves), dtype=np.int64).reshape(-1, 3)
+    out = np.zeros(len(arr), dtype=np.float64)
+    if len(arr) == 0:
+        return out
+    xs, ys, ss = arr[:, 0], arr[:, 1], arr[:, 2]
+    ok = ss > 1
+    if not ok.any():
+        return out
+    xs, ys, ss = xs[ok], ys[ok], ss[ok]
+    if priority == "edgef1":
+        out[ok] = rect_sobel_var_many(bundle, xs, ys, ss)
+        return out
+    half = ss // 2
+    # ONE query covers the parent square AND its four children: index i is the
+    # parent, the next 4N entries are the children of the leaves in order. Issuing
+    # it as a single call rather than two matters because the cost here is numpy
+    # call overhead, not arithmetic -- see the note in brick_sat.
+    qx = np.concatenate([xs, xs, xs + half, xs, xs + half])
+    qy = np.concatenate([ys, ys, ys, ys + half, ys + half])
+    qs = np.concatenate([ss, half, half, half, half])
+    res = rect_sse_total_many(bundle, qx, qy, qs)
+    n = len(xs)
+    parent = res[:n]
+    child = res[n:].reshape(4, -1).sum(axis=0)
+    out[ok] = (parent - child) / 6.0
+    return out
+
+
+def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
+                       impl="sat"):
     """Top-down quadtree + greedy priority queue (rate-distortion optimisation).
 
     Function
@@ -114,13 +165,25 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse"):
       S_set : iterable of ints — allowed cell sizes; must all be powers
               of 2 so a leaf can keep halving.
       max_triangles : int — hard budget (default 10000).
-      priority     : "mse" (default, uses ΔMSE/6) or "edgef1"
-                     (uses Sobel variance). Validated at the top of the
-                     function; anything else raises ValueError.
+      priority     : "mse" (default, uses ΔMSE/6) or "edgef1" (uses Sobel
+                     variance). Validated at the top; anything else raises.
+      impl         : "sat" (default) answers the split priorities from the
+                     summed-area tables in `brick_sat`, batched one query per
+                     split, so the cost stops scaling with region area rather than
+                     with numpy call count. "ref" keeps the original
+                     per-candidate numpy means and exists so the two can be
+                     measured against each other. For the default "mse" priority
+                     the decision rule is numerically IDENTICAL, so impl is a pure
+                     speed knob (measured 3.0x on that stage at 9990 bricks, same
+                     bricks out). For "edgef1" it is NOT identical: the tables come
+                     from a single global Sobel map, whereas the reference runs
+                     Sobel per region and so reflects at each region's border; a
+                     warning is printed in that combination.
     Intermediate:
-      leaves : dict {(x, y, size) -> mse_float}. `leaves[k]` is the MSE
-               of the square at (x, y) with side `size` in PADDED coords.
-               `x, y` are integer pixel offsets; `size` is from S_set.
+      leaves : set of (x, y, size) -- the cells that currently exist, in PADDED
+               coordinates. Membership only; the SSE of a cell is recomputed on
+               demand from the tables rather than stored, because the stored copy
+               was never read (see the note in the body).
       heap   : list of (-priority, leaf) tuples. Negation because Python's
                heapq is a min-heap; we want to pop the LARGEST priority
                first so we negate on push and re-negate on pop.
@@ -136,19 +199,25 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse"):
     if priority not in ("mse", "edgef1"):
         raise ValueError(
             f"Unknown priority {priority!r}; expected 'mse' or 'edgef1'.")
+    if impl not in ("sat", "ref"):
+        raise ValueError(f"Unknown impl {impl!r}; expected 'sat' or 'ref'.")
 
     padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
     Hp, Wp = padded.shape[:2]
     t0 = time.time()
 
-    leaves = {}
-    # Seed the coarsest level with one (x, y, S_max) entry per cell position.
+    # `leaves` holds only MEMBERSHIP -- the set of cells that currently exist.
+    # It used to be a dict mapping cell -> its SSE, and that SSE was computed at
+    # seed time and again for every child on every split, then never read: the
+    # only uses are `len()`, iteration, `in`, and `list(leaves.keys())`. At 9990
+    # triangles that is 4 discarded region-SSE computations per split, on top of
+    # the 5 the priority function actually needs. Storing a value nobody reads was
+    # pure waste, so the container is now a set and the waste is gone.
+    leaves = set()
     for i in range(Hp // S_max):
         for j in range(Wp // S_max):
-            x, y = j * S_max, i * S_max
-            # MSE of the cell = the budget we'll save by splitting it later.
-            leaves[(x, y, S_max)] = _region_mse(padded[y:y + S_max, x:x + S_max])
+            leaves.add((j * S_max, i * S_max, S_max))
     n_tri = len(leaves) * 2
     print(f"    [qt] start S_max={S_max}: {len(leaves)} cells, {n_tri} triangles "
           f"(budget {max_triangles}) ({time.time()-t0:.2f}s)")
@@ -158,9 +227,42 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse"):
         from brick_region_merge import region_merge_partition
         return region_merge_partition(img, S_set, max_triangles)
 
+    # One O(H*W) pass builds the tables every priority query then reads in O(1).
+    # `with_sobel` is only paid for when the priority actually needs it.
+    if impl == "sat":
+        if priority == "edgef1":
+            # The reference runs Sobel per region, which reflects at the region
+            # boundary; this runs it once globally. The values differ near region
+            # edges (measured: identical for "mse", median 2x relative difference
+            # for "edgef1"), so say so rather than let a number quietly change
+            # meaning. Recorded E_priority results came from the per-region form.
+            print("    [qt] note: edgef1 + impl=sat uses a GLOBAL Sobel map; "
+                  "not numerically equal to the per-region reference")
+        bundle = build_sats(padded, with_sobel=(priority == "edgef1"))
+
+        def leaf_priorities(lfs):
+            """Table-backed priorities for a batch of leaves, in one query.
+
+            Shape/semantics: `lfs` is an iterable of `(x, y, size)` in padded
+            coordinates; returns a (N,) float64 array aligned with it, as
+            documented on `_quadtree_priorities_sat`. Bound to the tables and the
+            priority string so the main loop can be written once for both
+            implementations instead of duplicating the split logic.
+            """
+            return _quadtree_priorities_sat(bundle, lfs, priority)
+    else:
+        def leaf_priorities(lfs):
+            """Reference priorities for a batch of leaves, one call per leaf.
+
+            Shape/semantics: same contract as the table-backed version, but N
+            separate numpy passes over the region -- kept so the two
+            implementations can be timed against each other from the same loop.
+            """
+            return [_quadtree_priority(padded, lf, priority) for lf in lfs]
+
     heap = []
-    for leaf in leaves:
-        p = _quadtree_priority(padded, leaf, priority)
+    seed = list(leaves)
+    for leaf, p in zip(seed, leaf_priorities(seed)):
         heapq.heappush(heap, (-p, leaf))
 
     iters = 0
@@ -176,14 +278,13 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse"):
         half = size // 2
         children = [(x, y, half), (x + half, y, half),
                     (x, y + half, half), (x + half, y + half, half)]
-        del leaves[leaf]
+        leaves.discard(leaf)
         n_tri += 6  # 1 cell (2 tri) -> 4 cells (8 tri)
-        for c in children:
-            cx, cy, cs = c
-            leaves[c] = _region_mse(padded[cy:cy + cs, cx:cx + cs])
-            heapq.heappush(heap, (-_quadtree_priority(padded, c, priority), c))
+        for c, p in zip(children, leaf_priorities(children)):
+            leaves.add(c)
+            heapq.heappush(heap, (-p, c))
         iters += 1
 
     print(f"    [qt] done: splits={iters}, n_tri={n_tri}, cells={len(leaves)} "
           f"({time.time()-t0:.2f}s)")
-    return list(leaves.keys()), (Hp, Wp), orig_shape
+    return list(leaves), (Hp, Wp), orig_shape

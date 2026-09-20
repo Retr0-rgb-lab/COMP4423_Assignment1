@@ -364,6 +364,81 @@ solves that with O(1) summed-area lookups. That is the next step.
 
 Artifacts: `pics/task4/L3_means/{mask,fast,sample}/frame0001_{input,render,compare}.png`.
 
+## Level 3, step 2: the partition stage (`brick_sat.py` + `impl=` on the quadtree)
+
+With `means` down to 21 ms, `quadtree_partition` was 82% of the frame. It had the
+same defect shape as the old `means`: a numpy region mean recomputed for every
+split candidate. Two independent fixes, each measured.
+
+### Fix A -- computer code that nobody read
+
+`quadtree_partition` kept `leaves` as a dict `{(x,y,size) -> SSE}` and computed
+that SSE at seed time and again for every child of every split. The value is never
+read: the only uses are `len()`, iteration, `in`, and `list(leaves.keys())`. So at
+9990 triangles, **4 of the 9 region-SSE computations per split were discarded**,
+on top of the 5 the priority function actually needs. `leaves` is now a set and
+the waste is gone: 436 ms → 326 ms on that stage for zero change in behaviour.
+
+### Fix B -- O(1) lookups, then batch them, because O(1) was not enough
+
+`brick_sat.py` builds summed-area tables (value and value²) in one O(H*W) pass, so
+a rectangle's SSE is four lookups instead of a numpy pass over the region.
+
+The instructive part is that **the first version of this was not faster at all**
+(measured 0.9–1.0×). The reason: O(1) in *arithmetic* is not O(1) in *numpy call
+overhead*. Each rectangle costs ~8 fancy-index operations, and the quadtree
+evaluates ~5 rectangles per split, so at 9990 triangles there are ~160000 tiny
+numpy calls and the overhead, not the maths, is the cost. The fix was to issue the
+lookups for a whole batch of squares at once -- and then to fold the parent and its
+four children into a *single* query of 5N squares. That is where the speed came
+from, ~2× from batching the children and another ~1.5× from merging the parent in.
+
+### Measured
+
+Partition stage on one frame, isolated, repeated (so it is not a single-run
+fluke):
+
+| Implementation | 2000 bricks | 5000 bricks | 9990 bricks |
+|---|---|---|---|
+| `ref` (original numpy) | 80 ms | 173 ms | 326 ms |
+| `sat` (tables, batched) | 44 ms | 69 ms | **107 ms** |
+| speedup | 1.8× | 2.5× | **3.0×** |
+
+End to end, full resolution, `--means fast`, best of three 12-frame runs:
+
+| `--sse` | Frame FPS | `partition` |
+|---|---|---|
+| `ref` | 1.93 | 325.7 ms |
+| **`sat`** | **3.43** | **106.9 ms** |
+
+**The brick partition is bit-identical between the two** (same cell set, same size
+distribution, verified per cell) for the default `mse` priority, so this is a pure
+speed change and no Task 4 result is invalidated by it.
+
+### One real behaviour difference, restricted to `edgef1`
+
+`priority="edgef1"` is the variance of the Sobel magnitude. The reference runs
+Sobel per region, which *reflects* at the region's boundary; the table version runs
+Sobel once globally. The two agree for `mse` (max relative difference 0.00e+00 over
+5570 cells) but not for `edgef1` (median relative difference 2.05) because the
+per-region form invents a mirrored neighbourhood. The code prints a warning when
+`edgef1` meets the table implementation, since the recorded E_priority results came
+from the per-region form. Task 4 uses `mse`, so this does not affect the camera app.
+
+### Measurement hygiene: two wrong numbers caught before they were published
+
+Twice during this step a single short run produced a number that contradicted a
+repeat. The first `--sse ref` A/B reported 0.92 FPS (partition 756 ms) against a
+direct measurement of 330 ms for the same implementation; re-running gave 1.77 FPS.
+The cause was residual load from the previous command, not the code. Same class of
+error as the earlier n=2 median mistake: **a statistic read off one short run is
+not evidence.** Every number in this file now comes from repeated runs, with the
+best-of-N taken for timings, because a timing under load is a measurement of the
+load.
+
+Artifacts: none yet for this step -- the partition change is geometry-identical, so
+the `pics/task4/L3_means/` renders remain valid for it.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.

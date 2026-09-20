@@ -97,6 +97,7 @@ class FrameConfig:
     budget: int = N_TRI_BUDGET
     scale: float = 1.0
     means: str = "fast"
+    sse_impl: str = "sat"
     n_samples: int = 9
     partition: str = "quadtree"
     priority: str = "mse"
@@ -160,7 +161,7 @@ def render_frame(frame, cfg, timer):
     with timer.stage("partition"):
         if cfg.partition == "quadtree":
             leaves, padded_shape, orig_shape = quadtree_partition(
-                frame, cfg.S_set, cfg.budget, cfg.priority)
+                frame, cfg.S_set, cfg.budget, cfg.priority, cfg.sse_impl)
         else:
             leaves, padded_shape, orig_shape = region_merge_partition(
                 frame, cfg.S_set, cfg.budget)
@@ -231,6 +232,9 @@ def main():
     p.add_argument("--k", type=int, default=pre["k"], help="palette size (>3)")
     p.add_argument("--means", choices=list(MEANS_METHODS), default="fast",
                    help="per-triangle colour method; 'mask' is the slow shipped")
+    p.add_argument("--sse", dest="sse_impl", choices=["sat", "ref"], default="sat",
+                   help="quadtree split-priority implementation; 'ref' is the "
+                        "original per-candidate numpy version (same bricks, slower)")
     p.add_argument("--n-samples", type=int, default=9,
                    help="interior points per triangle when --means sample")
     p.add_argument("--partition", choices=["quadtree", "region_merge"],
@@ -259,13 +263,14 @@ def main():
     cfg = FrameConfig(
         S_set=powers_of_two_upto(args.smax, args.smin),
         K=args.k, budget=args.budget, scale=args.scale, means=args.means,
-        n_samples=args.n_samples, partition=args.partition,
-        priority=args.priority, palette_method=args.palette_method,
+        n_samples=args.n_samples, sse_impl=args.sse_impl,
+        partition=args.partition, priority=args.priority,
+        palette_method=args.palette_method,
     )
 
     print(f"[task4] S_set={cfg.S_set} K={cfg.K} partition={cfg.partition} "
           f"priority={cfg.priority} palette={cfg.palette_method} "
-          f"means={cfg.means}")
+          f"means={cfg.means} sse={cfg.sse_impl}")
     cap = open_camera(args.camera, args.width, args.height)
     ok, frame = cap.read()
     if not ok or frame is None:
