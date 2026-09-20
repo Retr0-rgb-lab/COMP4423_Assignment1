@@ -306,7 +306,7 @@ open (candidate for Task 4 real-time / Task 5 future work).
   - `_quadtree_priority(img, leaf, priority)` — ΔMSE/6 or Sobel variance.
   - `palette_kmeans / palette_median_cut / quantize_nearest_bgr`.
   - `leaves_to_triangles / triangle_means_bgr / render_triangles`.
-  - Reuses Task 2's `compute_metrics` (9-metric suite).
+  - Reuses Task 2's `compute_metrics` (key list in `brick_metrics`).
   - `plot_size_histogram / plot_palette / build_summary`.
 - `code/task3_marginal.py` — marginal-benefit / rate-distortion analysis
   (records split history, produces the three analysis plots).
@@ -328,9 +328,17 @@ and `code/pics/task3/summary/` (CSV + bar chart). Per-run files:
 - **PSNR/ΔE slightly worse than the non-splitting version** — expected: the
   adaptive tiling trades pixel fidelity for edge alignment. Report should
   present both metrics, not just the favorable ones.
-- **FPS is 0.07–0.11** (i.e., ~10 s per frame) because metrics computation
-  (SSIM/MS-SSIM/ΔE/Edge F1) dominates; this is offline evaluation, not the
-  Task 4 pipeline. Task 4 will need a stripped-down render-only path.
+- **FPS is 0.07–0.11** (i.e., ~10 s per run). *Correction — the interval this
+  number covers was mis-stated here earlier.* The value comes from
+  `run_experiment`'s `t0`, read right after rendering, so it covers
+  **partition + per-triangle mean extraction + palette + quantize + render** and
+  **excludes** the metric computation (SSIM/MS-SSIM/ΔE/Edge F1). The earlier
+  sentence attributed the low rate to metrics computation, which is impossible —
+  metrics are outside the measured interval. Which of partition vs mean
+  extraction dominates was never measured, so treat that as **open** and
+  instrument it before attributing the cost. Either way this is offline
+  evaluation, not the Task 4 pipeline. Task 4 will need a stripped-down
+  render-only path, and it should report an explicitly-stated interval.
 - **Edge F1 / EPI still capped below 0.5** — power-of-two cell boundaries
   can only align with edges to the grid resolution; a content-aware
   (non-grid) triangulation would do better but violates the "equal right
