@@ -1073,6 +1073,16 @@ that we had missed.
 `camera_app.py` (flags); `powers_of_two_upto` moved to `frame_pipeline.py` to
 keep `camera_app.py` under the 400-line limit.
 
+### Author's real-machine confirmation (2026-09-21)
+
+Tested on the actual camera: the frame-to-frame jitter is **noticeably
+reduced**, and the render fidelity is **not worse than main** (`13d0733`).
+Recorded verbatim because it is the author's observation, not a metric measured
+in this session: the headless numbers above (0.000% static churn) and the
+author's visual verdict agree, so this attempt is accepted. It is merged into
+`main`; the per-cell dirty mask and the quantitative flicker metric are left as
+the next step.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
