@@ -9,19 +9,26 @@ Split out of `camera_app.py` on purpose. That driver was already at the 400-line
 limit (AGENTS 4.1), and the rule there is to split by responsibility rather than
 grow a file -- "driver stays thin" is the same rule this module serves.
 
-Three functions:
+Three functions, plus the aspect-preserving window fit:
   * `make_side_by_side` -- the two-pane composite the window shows.
-  * `draw_hud`          -- FPS / config / per-stage medians, drawn over a pane.
+  * `draw_hud`          -- a compact 3-line FPS/stage readout over a pane.
+  * `fit_letterbox`     -- scale the composite to a window WITHOUT stretching.
   * `window_closed`     -- did the user press the window's close button?
 """
 import cv2
 import numpy as np
 
-# BGR colours. Both HUD colours are dark so white text stays readable whatever
-# the frame contains -- a mosaic can end up mostly white, and light-on-light
-# text would vanish exactly in the bright scenes we most want to inspect.
-HUD_BG = (32, 32, 32)
-HUD_FG = (255, 255, 255)
+# BGR colours. The HUD text is light and sits on a translucent dark panel, so it
+# stays readable over any mosaic without the heavy solid boxes the first version
+# used (which covered a large part of the frame).
+HUD_BG = (24, 24, 24)
+HUD_FG = (235, 235, 235)
+HUD_ALPHA = 0.45          # panel opacity; 1.0 would be a solid box again
+HUD_FONT = cv2.FONT_HERSHEY_SIMPLEX
+HUD_SCALE = 0.4           # small: the HUD must not dominate the picture
+HUD_THICK = 1
+HUD_LINE_H = 14           # px between HUD baselines
+HUD_PAD = 6
 PANE_BG = (24, 24, 24)
 CAPTION_FG = (230, 230, 230)
 
@@ -92,58 +99,138 @@ def make_side_by_side(original, render, gap=GAP, caption_h=CAPTION_H):
     return out, w + gap
 
 
+def hud_lines(fps, info, cfg, paused, timer):
+    """The three compact HUD lines (kept separate so they can be measured).
+
+    Function: condenses what the first HUD version spread over 14 lines into
+    three -- one status line, one timing line, one key-help line -- because the
+    HUD should not cover the picture. The per-size histogram and the full config
+    are dropped here on purpose: they are still in the exit summary, which is
+    where anyone reading numbers should look, not the live overlay.
+
+    Shape/semantics: returns `list[str]`. `fps` is the caller's rolling FPS;
+    `info` supplies `n_tri`, `reused`, `render_reused` (see frame_pipeline);
+    `timer.report()` supplies the per-stage medians, so the overlay and the exit
+    summary come from one identical measurement.
+    """
+    rep = timer.report()
+    stage = " ".join(f"{name[:4]} {rep[name]['median_ms']:.0f}"
+                     for name in ("partition", "triangles", "means", "palette",
+                                  "quantize", "render") if name in rep)
+    mode = "REUSE" if info.get("reused") else "PART"
+    mode += "/cached" if info.get("render_reused") else "/redraw"
+    return [
+        f"FPS {fps:4.1f} {'PAUSED' if paused else 'live'}  "
+        f"tris {info['n_tri']}/{cfg.budget}  K{cfg.K}  {mode}",
+        f"{stage}  tot {rep['__total__']['median_ms']:.0f}",
+        "q quit  s snapshot  p pause  r reset",
+    ]
+
+
 def draw_hud(canvas, fps, info, cfg, paused, timer, x0=0):
-    """Draw the FPS / config / per-stage HUD onto `canvas` in place.
+    """Draw the compact HUD onto `canvas` in place.
 
     Function
     --------
     The HUD is how a real-time claim is verified on screen instead of asserted:
-    it shows the measured FPS *and* the median cost of each pipeline stage, so a
-    viewer can see WHERE the time goes rather than only that the result is slow.
+    it shows the measured FPS *and* the median cost of each stage. It is drawn
+    as three small lines on ONE translucent panel (a local `addWeighted` over
+    the panel ROI only), not the original stack of solid black boxes, so it no
+    longer covers a large part of the frame.
 
     Shape
     -----
-    `canvas` is (H, W, 3) uint8 BGR, modified in place. Each line is drawn on its
-    own filled rectangle whose height tracks the measured text height, stacked
-    downward from `y=22` at horizontal offset `x0+6`; the panel is drawn over
-    whatever is already there, so it is normally the LAST thing drawn on a pane.
+    `canvas` is (H, W, 3) uint8 BGR, modified in place. The panel is
+    `(panel_w, panel_h)` starting at `(x0+4, 4)`, where panel_w/panel_h are
+    measured from the text; the ROI is clamped to the canvas so a tiny window
+    cannot index out of bounds. `x0` is the left edge of the pane the HUD
+    belongs to (the render pane's offset in the composite), so the text sits
+    over the render, not across the separator.
 
     Semantics
     ---------
-    `x0` is the left edge of the pane the HUD belongs to -- for a two-pane
-    composite the caller passes the render pane's offset, otherwise the text
-    would straddle the separator. `fps` is the caller's rolling estimate, and
-    `timer.report()` supplies the per-stage medians, so what is on screen and
-    what the exit summary prints come from one identical measurement.
+    Text is drawn AFTER the translucent panel, so the glyphs stay fully opaque
+    over the darkened background. Because the driver fits the composite to the
+    window BEFORE calling this, a fixed `HUD_SCALE` keeps the HUD a constant
+    screen size no matter how the window is dragged.
     """
-    rep = timer.report()
-    lines = [
-        f"FPS {fps:5.1f}   {'PAUSED' if paused else 'live'}",
-        f"tris {info['n_tri']:5d}/{cfg.budget}   cells {info['n_cells']:5d}",
-        f"{cfg.partition} S_max={max(cfg.S_set)} K={cfg.K} "
-        f"{cfg.palette_method}",
-        f"{'REUSE (static scene)' if info.get('reused') else 'PARTITION'} "
-        f"{'canvas CACHED' if info.get('render_reused') else 'canvas REDRAWN'} "
-        f"{'palette FRESH' if info.get('palette_refreshed') else ''}",
-        "sizes " + " ".join(f"{s}:{n}" for s, n in sorted(info["sizes"].items())),
-        "--- median ms per stage ---",
-    ]
-    for name in ["partition", "triangles", "means", "palette", "quantize",
-                 "render"]:
-        if name in rep:
-            lines.append(f"  {name:<10s} {rep[name]['median_ms']:8.1f}")
-    lines.append(f"  {'frame':<10s} {rep['__total__']['median_ms']:8.1f}")
-    lines.append("q/ESC quit   s snapshot   p pause   r reset")
-
-    y = 22
+    lines = hud_lines(fps, info, cfg, paused, timer)
+    sizes = [cv2.getTextSize(t, HUD_FONT, HUD_SCALE, HUD_THICK)[0]
+             for t in lines]
+    tw = max(s[0] for s in sizes)
+    th = max(s[1] for s in sizes)
+    H, W = canvas.shape[:2]
+    px0, py0 = x0 + 4, 4
+    px1 = min(W, px0 + tw + 2 * HUD_PAD)
+    py1 = min(H, py0 + HUD_LINE_H * len(lines) + 2 * HUD_PAD)
+    if px1 > px0 and py1 > py0:
+        roi = canvas[py0:py1, px0:px1]
+        dark = np.full_like(roi, HUD_BG)
+        cv2.addWeighted(dark, HUD_ALPHA, roi, 1.0 - HUD_ALPHA, 0.0, roi)
+    y = py0 + HUD_PAD + th
     for text in lines:
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(canvas, (x0 + 6, y - th - 4), (x0 + 14 + tw, y + 4),
-                      HUD_BG, -1)
-        cv2.putText(canvas, text, (x0 + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    HUD_FG, 1, cv2.LINE_AA)
-        y += th + 9
+        if y < H:
+            cv2.putText(canvas, text, (px0 + HUD_PAD, y), HUD_FONT, HUD_SCALE,
+                        HUD_FG, HUD_THICK, cv2.LINE_AA)
+        y += HUD_LINE_H
     return canvas
+
+
+def window_area(name):
+    """Size (w, h) of a window's drawable image area, or None if unavailable.
+
+    Function: `cv2.getWindowImageRect` reports the client area that `imshow`
+    scales into, which is what the aspect-preserving fit needs to target. Some
+    backends raise, or report a zero/negative rect before the window is mapped,
+    so that is reported as None and the caller falls back to native size.
+
+    Shape/semantics: window title str in; `(w, h)` ints or None out. No side
+    effects on the window.
+    """
+    try:
+        _, _, w, h = cv2.getWindowImageRect(name)
+        if w > 0 and h > 0:
+            return w, h
+    except cv2.error:
+        pass
+    return None
+
+
+def fit_letterbox(img, win_w, win_h, bg=PANE_BG):
+    """Scale `img` to fit (win_w, win_h) with the aspect ratio PRESERVED.
+
+    Function
+    --------
+    A `WINDOW_NORMAL` window stretches whatever `imshow` receives to fill it, so
+    displaying the native composite in a differently-shaped window makes every
+    right-isosceles triangle non-isosceles. This fits the image into the window
+    with a uniform scale and centres it on a background, so the caller can
+    `imshow` a window-sized canvas and the stretch becomes a no-op.
+
+    Shape
+    -----
+    Input: `img` (h, w, 3) uint8 BGR; target `(win_w, win_h)`. Output:
+    `(canvas, off_x, off_y, scale)` where `canvas` is exactly
+    `(win_h, win_w, 3)` uint8, `scale = min(win_w/w, win_h/h)` (<=1 shrinks),
+    and `(off_x, off_y)` is where the scaled image was pasted, so the caller can
+    map pane coordinates into the canvas. When the sizes already match, the
+    input is returned unscaled (`scale=1.0`, offsets 0) to skip a needless copy.
+
+    Semantics: `canvas[off_y:off_y+round(h*scale), off_x:off_x+round(w*scale)]`
+    is the aspect-preserved image; the rest is `bg`. Uniform `scale` guarantees
+    the isosceles right triangles stay isosceles right triangles.
+    """
+    h, w = img.shape[:2]
+    if win_w == w and win_h == h:
+        return img, 0, 0, 1.0
+    scale = min(win_w / w, win_h / h)
+    nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(img, (nw, nh), interpolation=interp)
+    canvas = np.full((win_h, win_w, 3), bg, dtype=np.uint8)
+    ox, oy = (win_w - nw) // 2, (win_h - nh) // 2
+    canvas[oy:oy + nh, ox:ox + nw] = resized
+    return canvas, ox, oy, scale
 
 
 def window_closed(name):

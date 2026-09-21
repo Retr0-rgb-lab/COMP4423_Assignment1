@@ -51,6 +51,7 @@ from brick_temporal import TemporalState  # noqa: E402
 from brick_io import (save_png, StageTimer, print_stage_summary,
                      open_camera)  # noqa: E402
 from brick_display import (make_side_by_side, composite_size, draw_hud,
+                           fit_letterbox, window_area,
                            window_closed)  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -334,10 +335,16 @@ def main():
                 break
 
             if not args.no_show:
-                # HUD goes over the RENDER pane (`render_x0`), not the middle of
-                # the composite, so it never straddles the separator.
-                draw_hud(view, fps, info, cfg, paused, timer, x0=render_x0)
-                cv2.imshow(WINDOW, view)
+                # Fit the composite into the current window with the aspect
+                # ratio PRESERVED, then draw the HUD on the FITTED canvas. This
+                # fixes two things: a stretched window can no longer deform the
+                # isosceles right triangles, and the HUD stays a constant screen
+                # size (a fixed font scale) instead of growing with the window.
+                area = window_area(WINDOW) or (view.shape[1], view.shape[0])
+                display, ox, oy, dscale = fit_letterbox(view, area[0], area[1])
+                draw_hud(display, fps, info, cfg, paused, timer,
+                         x0=ox + int(render_x0 * dscale))
+                cv2.imshow(WINDOW, display)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), 27):
                     break
@@ -347,8 +354,10 @@ def main():
                     timer.reset()
                     temporal_state.reset()  # drop cached partition/labels
                 if key == ord("s"):
-                    # Snapshot what is ON SCREEN (the composite), so the saved
-                    # image is exactly the evidence the viewer just looked at.
+                    # Snapshot the composite WITHOUT the HUD: the overlay is a
+                    # live readout, not part of the mosaic, and evidence images
+                    # are cleaner without it. `view` is the un-annotated native
+                    # composite (the HUD is drawn on the fitted display copy).
                     path = os.path.join(args.snapshot_dir,
                                         f"snap_{snapshots:03d}.png")
                     save_png(path, view)
