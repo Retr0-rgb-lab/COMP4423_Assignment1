@@ -49,6 +49,8 @@ from brick_geom import (leaves_to_triangles, leaves_to_triangles_array,
                         pad_to_max)  # noqa: E402
 from brick_quadtree import quadtree_partition  # noqa: E402
 from brick_color import build_palette, quantize_nearest_bgr  # noqa: E402
+from brick_color_rt import palette_kmeans_warm  # noqa: E402
+from brick_temporal import TemporalState  # noqa: E402
 from brick_render import (render_triangles, render_triangles_batched)  # noqa: E402
 from brick_means import extract_means  # noqa: E402
 from brick_io import StageTimer  # noqa: E402
@@ -193,7 +195,9 @@ def check_palette_cache(frame, leaves, reps):
     padded, _, _ = pad_to_max(frame, 32)
     means = extract_means(padded, leaves, "fast")
     refresh, frames = 5, 22   # refresh < default so the test exercises it fast
-    state = PaletteState(refresh)
+    # deadband=0 isolates the cadence logic from the palette dead-band (which
+    # would otherwise turn a no-op rebuild into a non-refresh frame).
+    state = PaletteState(refresh, deadband=0.0)
     palettes, refreshed_flags = [], []
     for _ in range(frames):
         palettes.append(state.get(means, 16, "kmeans_lab").copy())
@@ -261,6 +265,96 @@ def check_end_to_end(frame, cfg, reps):
     return t_b, t_o
 
 
+def _churn(a, b, thresh=8):
+    """Fraction of pixels whose largest channel change exceeds `thresh`.
+
+    Function: frame-to-frame difference that ignores sub-perceptual changes.
+    Needed because a warm-started palette still moves 1-2/255 at a rebuild
+    frame, which flips "any pixel differs" on most of the frame while being
+    invisible; a threshold of 8 grey levels measures what a viewer sees.
+
+    Shape/semantics: two (H,W,3) uint8 BGR frames in; one float in [0,1] out,
+    the share of pixels with max-channel |delta| > `thresh`.
+    """
+    d = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2)
+    return float((d > thresh).mean())
+
+
+def check_temporal(identical, noisy, cfg, reps):
+    """Temporal coherence (A+B+C): palette rebuild must stop jumping and a
+    static scene must stop re-partitioning.
+
+    Function: drives render_frame over two synthetic sequences -- identical
+    frames and noisy frames -- with temporal coherence OFF and ON, separating
+    STEADY frames (palette cached) from REBUILD frames, and measures palette
+    deltas and thresholded canvas churn. Also checks the warm-start fixed
+    point: re-refining an already-optimal palette must not jump.
+
+    Shape/semantics: sequences are lists of (H,W,3) uint8 BGR frames; both
+    lists must be the same length. Prints the table and asserts the temporal
+    improvements before any of it may be quoted.
+    """
+    # Warm-start fixed point: refining p0 should stay near p0, unlike two cold
+    # builds which differed by ~153/255 (the measured flash cause).
+    padded, _, _ = pad_to_max(identical[0], 32)
+    leaves, _, _ = quadtree_partition(identical[0], cfg.S_set, cfg.budget, "mse",
+                                      "sat")
+    means = extract_means(padded, leaves, "fast")
+    p0 = build_palette(means, cfg.K, "kmeans_lab")
+    p1 = build_palette(means, cfg.K, "kmeans_lab")
+    pw = palette_kmeans_warm(means, cfg.K, p0, "lab")
+    cold = int(np.abs(p0.astype(int) - p1.astype(int)).max())
+    warm = int(np.abs(p0.astype(int) - pw.astype(int)).max())
+    print(f"  [A] palette stability: cold rebuild delta {cold} (RNG jump) | "
+          f"warm-start delta {warm}")
+    assert warm < cold // 2, "warm start did not stabilise the palette"
+
+    def run_sequence(frames, temporal_on):
+        cv2.setRNGSeed(0)
+        pal_state = PaletteState(cfg.palette_refresh)
+        tstate = TemporalState(cfg.temporal and temporal_on, cfg.reuse_thresh,
+                               cfg.hysteresis, cfg.max_reuse)
+        prev, prev_pal = None, None
+        steady, flash, reused = [], [], 0
+        for f in frames:
+            canvas, _, info = render_frame(f, cfg, StageTimer(), pal_state,
+                                           tstate)
+            if info["reused"]:
+                reused += 1
+            if prev is not None:
+                c = _churn(canvas, prev)
+                (flash if info["palette_refreshed"] else steady).append(c)
+            prev, prev_pal = canvas, info["palette"]
+        return steady, flash, reused
+
+    rows = {}
+    for name, seq in (("identical", identical), ("noisy", noisy)):
+        for temporal_on in (False, True):
+            steady, flash, re = run_sequence(seq, temporal_on)
+            rows[(name, temporal_on)] = (steady, flash, re)
+            print(f"  [B/C] {name:9s} temporal={'ON ' if temporal_on else 'OFF'} "
+                  f"| steady churn {np.mean(steady)*100:6.3f}% "
+                  f"| rebuild-frame churn "
+                  f"{(max(flash) if flash else 0.0)*100:6.3f}% "
+                  f"| reused {re}/{len(seq)}")
+
+    # Assertions: temporal ON must freeze a static scene and cut the churn.
+    # The rebuild-frame bound is 0.1%, not 0: a warm-started entry can still
+    # move 1/255, which flips a handful of pixels sitting exactly on a palette
+    # boundary (~0.003% measured, i.e. single-digit pixels -- imperceptible).
+    id_on = rows[("identical", True)]
+    assert np.max(id_on[0]) == 0.0, "identical frames still churn with temporal ON"
+    assert (max(id_on[1]) if id_on[1] else 0.0) < 0.001, \
+        "warm-started rebuild still visibly churns identical frames"
+    assert id_on[2] == len(identical) - 1, "static frames were not all reused"
+    noisy_off, noisy_on = rows[("noisy", False)], rows[("noisy", True)]
+    assert np.mean(noisy_on[0]) < np.mean(noisy_off[0]), \
+        "temporal coherence did not reduce per-frame churn"
+    print(f"  [B/C] noisy steady churn: OFF {np.mean(noisy_off[0])*100:.3f}% -> "
+          f"ON {np.mean(noisy_on[0])*100:.3f}% "
+          f"({np.mean(noisy_off[0])/max(np.mean(noisy_on[0]),1e-12):.1f}x less)")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--reps", type=int, default=5, help="benchmark repetitions")
@@ -285,6 +379,14 @@ def main():
 
     print("\n-- end-to-end frame --")
     check_end_to_end(frame, cfg, reps)
+
+    print("\n-- temporal coherence (A+B+C) --")
+    rng = np.random.default_rng(0)
+    ident = [frame.copy() for _ in range(14)]
+    noisy = [np.clip(frame.astype(np.float32)
+                     + rng.normal(0, 2.0, frame.shape), 0, 255).astype(np.uint8)
+             for _ in range(14)]
+    check_temporal(ident, noisy, cfg, reps)
     print("\nAll assertions passed.")
 
 

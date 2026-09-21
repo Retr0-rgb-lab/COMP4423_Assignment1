@@ -47,6 +47,7 @@ import cv2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from frame_pipeline import (FrameConfig, PaletteState, render_frame,
                             MEANS_METHODS, MAX_TRIANGLES)  # noqa: E402
+from brick_temporal import TemporalState  # noqa: E402
 from brick_io import (save_png, StageTimer, print_stage_summary,
                      open_camera)  # noqa: E402
 from brick_display import (make_side_by_side, composite_size, draw_hud,
@@ -175,6 +176,26 @@ def main():
                    help="rebuild the K-Means palette every N frames, reuse it "
                         "otherwise (1 = every frame, the old behaviour; the "
                         "default 10 removes the palette flicker)")
+    p.add_argument("--palette-deadband", type=float, default=2.0, metavar="D",
+                   help="discard a warm-started palette rebuild that moves no "
+                        "entry by more than D grey levels (keeps static scenes "
+                        "byte-frozen; 0 disables)")
+    p.add_argument("--temporal", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="temporal coherence (default on): reuse the partition "
+                        "when the scene is static and keep cell labels unless "
+                        "another colour is clearly better. --no-temporal "
+                        "restores the per-frame recompute pipeline")
+    p.add_argument("--reuse-thresh", type=float, default=1.0, metavar="D",
+                   help="scene-change threshold: mean |signature delta| (0-255 "
+                        "grey levels) below which the partition is reused")
+    p.add_argument("--hysteresis", type=float, default=0.1, metavar="M",
+                   help="label dead-band: keep a cell's colour unless another "
+                        "palette entry is better by this relative margin "
+                        "(0 = plain nearest colour)")
+    p.add_argument("--max-reuse", type=int, default=0, metavar="N",
+                   help="force a re-partition after N reused frames (0 = never; "
+                        "the scene-change test alone decides)")
     p.add_argument("--n-samples", type=int, default=9,
                    help="interior points per triangle when --means sample")
     p.add_argument("--partition", choices=["quadtree", "region_merge"],
@@ -204,14 +225,18 @@ def main():
         S_set=powers_of_two_upto(args.smax, args.smin),
         K=args.k, budget=args.budget, scale=args.scale, means=args.means,
         n_samples=args.n_samples, sse_impl=args.sse_impl,
-        palette_refresh=args.palette_refresh, partition=args.partition,
+        palette_refresh=args.palette_refresh,
+        palette_deadband=args.palette_deadband, temporal=args.temporal,
+        reuse_thresh=args.reuse_thresh, hysteresis=args.hysteresis,
+        max_reuse=args.max_reuse, partition=args.partition,
         priority=args.priority, palette_method=args.palette_method,
     )
 
     print(f"[task4] S_set={cfg.S_set} K={cfg.K} partition={cfg.partition} "
           f"priority={cfg.priority} palette={cfg.palette_method} "
           f"means={cfg.means} sse={cfg.sse_impl} "
-          f"palette_refresh={cfg.palette_refresh}")
+          f"palette_refresh={cfg.palette_refresh} temporal={cfg.temporal} "
+          f"(reuse_thresh={cfg.reuse_thresh} hysteresis={cfg.hysteresis})")
     cap, static_frame = None, None
     if args.input:
         cap, static_frame = open_input(args.input)
@@ -252,7 +277,9 @@ def main():
               f"(x{args.window_scale}); drag its edges to resize")
 
     timer = StageTimer()
-    palette_state = PaletteState(cfg.palette_refresh)
+    palette_state = PaletteState(cfg.palette_refresh, cfg.palette_deadband)
+    temporal_state = TemporalState(cfg.temporal, cfg.reuse_thresh,
+                                   cfg.hysteresis, cfg.max_reuse)
     snapshots, paused, fps = 0, False, 0.0
     frame = first  # so a paused first iteration has a frame to re-render
     n_frames, t_start = 0, time.perf_counter()
@@ -269,7 +296,8 @@ def main():
                         print("[task4] frame read failed; stopping")
                         break
             canvas, processed, info = render_frame(frame, cfg, timer,
-                                                   palette_state)
+                                                   palette_state,
+                                                   temporal_state)
 
             # FPS is the FULL loop period (read + process + display), so the
             # timestamp must be taken AFTER the work, not right after `read`.
@@ -315,6 +343,7 @@ def main():
                     paused = not paused
                 if key == ord("r"):
                     timer.reset()
+                    temporal_state.reset()  # drop cached partition/labels
                 if key == ord("s"):
                     # Snapshot what is ON SCREEN (the composite), so the saved
                     # image is exactly the evidence the viewer just looked at.
@@ -345,7 +374,10 @@ def main():
                             context={"scale": cfg.scale, "budget": cfg.budget,
                                      "S_set": cfg.S_set, "K": cfg.K,
                                      "sse": cfg.sse_impl,
-                                     "palette_refresh": cfg.palette_refresh})
+                                     "palette_refresh": cfg.palette_refresh,
+                                     "temporal": cfg.temporal,
+                                     "reuse_thresh": cfg.reuse_thresh,
+                                     "hysteresis": cfg.hysteresis})
 
 
 if __name__ == "__main__":
