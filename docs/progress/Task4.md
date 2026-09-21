@@ -782,6 +782,139 @@ fixed per-split saving stays constant while the map precompute grows.
   binding returns unusable shapes (per-row list) here, and the numpy cumsum
   variants (axis swap, stacked) are bit-identical but no faster.
 
+## Level 3, step 5: frame-to-frame jitter -- root-cause analysis
+
+**Symptom (reported by the author):** with the camera held still, the mosaic
+still changes every frame -- a continuous crawl, plus a stronger periodic
+"flash". This is analysed and then fixed by the A+B+C temporal-stability
+workstream below; this section is the analysis, written before the fix.
+
+### Method
+
+A headless probe drives the exact live pipeline (`quadtree_partition` ->
+`leaves_to_triangles_array` -> `extract_means` -> `PaletteState` +
+`quantize_nearest_bgr` -> `render_triangles_batched`) over synthetic frame
+sequences, and measures FIVE frame-to-frame quantities so the blame lands on a
+stage, not on "the pipeline":
+
+| metric | meaning |
+|---|---|
+| `geo` | cells in the symmetric difference of consecutive leaf sets (geometry churn) |
+| `flips` | cells present in both frames whose palette label changed (colour churn) |
+| `cold1` | mean per-channel |delta| of a cell's colour (noise level reaching the quantizer) |
+| `pal_d1` | max |delta| between consecutive palettes |
+| `canvas_d1` | fraction of rendered pixels that changed |
+
+Sequences: **A** identical frames (pipeline-internal instability only),
+**B** frames + Gaussian noise sigma=2 (realistic webcam sensor noise),
+**B3** same but geometry frozen at frame 0 (isolates colour churn from
+geometry churn), **C** frames with +1.5/frame global brightness (models camera
+auto-exposure drift).
+
+### Evidence
+
+| sequence | per-frame churn | at palette rebuild (every 10th) |
+|---|---|---|
+| A. identical frames | **all zero** | `pal_d1` 147, **canvas 76.6%** |
+| B. noise sigma=2 | geo 118-234 cells (3-5%), flips ~130-160/4900, canvas 0.55-0.96% | `pal_d1` 166, **canvas 76.7%** |
+| B3. noise, geometry frozen | geo 0, flips 132-162/4995, canvas 0.31-0.59% | `pal_d1` 180, **canvas 76.7%** |
+| C. brightness drift | geo 0-34, flips 181-461, canvas **2.85-8.07%** | **canvas 76.7%** |
+
+Identical frames produce **zero** change except at the rebuild frame, so the
+jitter is not code non-determinism -- it is "recompute everything every frame
+from noisy pixels" plus the palette rebuild. Three causes, quantified:
+
+**Cause 1 -- K-Means is unstable two different ways, giving a 76% flash every
+10 frames (dominant).** Micro-test on the palette alone:
+
+| condition | max palette delta |
+|---|---|
+| same data, no re-seed | **180** (global RNG -> different local optimum) |
+| same data, re-seeded | 0 |
+| different noisy frames, re-seeded | **144** (sigma=2 data -> a different local optimum wins) |
+
+`camera_app` calls `cv2.setRNGSeed(0)` once at startup, so each rebuild draws a
+different random init; and `kmeans_lab` runs 10 restarts picking the best, on
+near-degenerate data, so even a re-seeded run flips local optimum when the
+input moves by sigma=2. **Re-seeding alone is therefore not enough** -- that is
+the key finding.
+
+**Cause 2 -- no temporal coherence anywhere.** Partition, means and quantize
+are recomputed every frame from noisy pixels, so noise moves near-tie split
+decisions (3-5% of cells change layout per frame) and flips labels near palette
+boundaries (~3% of cells per frame). Frozen geometry still leaves ~0.3-0.6% of
+pixels changing per frame, i.e. **most of the per-frame crawl is colour, not
+geometry**, but both contribute.
+
+**Cause 3 -- camera auto-exposure/white-balance drift amplifies everything.**
+A 1.5/255-per-frame brightness ramp raises per-frame canvas churn from ~0.5% to
+2.9-8.1%, because many cell colours cross quantization boundaries. This is the
+strongest "breathing" component on a real camera. Note this is a MODEL run
+headless; the actual camera's drift was not measured (no camera in this
+session).
+
+Also worth stating: the `PaletteState` refresh cadence added earlier reduced the
+rebuild FREQUENCY to 1-in-10 but not the MAGNITUDE, converting a per-frame
+flash into a periodic one. Periodic large jumps read as more objectionable
+than continuous small drift.
+
+### Fix (A+B+C), implemented on this branch
+
+- **A -- warm-start the palette** from the previous one
+  (`cv2.KMEANS_USE_INITIAL_LABELS`, initial partition = current means assigned
+  to the previous palette), so a rebuild refines the previous local optimum
+  instead of jumping to a new one. Entry correspondence is preserved by
+  construction (labels tie to previous centroids), which also prevents
+  permutation. Code: `brick_color_rt.palette_kmeans_warm`, called by
+  `PaletteState.get` on rebuild frames.
+- **A' -- palette dead-band**: a warm-started rebuild that moves no entry by
+  more than 2 grey levels is discarded (the previous palette is kept
+  byte-for-byte). Without it a 1/255 refinement still flipped a few cells
+  sitting exactly on a palette boundary; the dead-band makes a static scene
+  byte-frozen.
+- **B -- reuse the partition when the scene has not changed** (keyframe +
+  mean-subtracted 64x48 grey signature, `reuse_thresh`): static frames keep the
+  SAME leaves and triangle array, means are still re-extracted from the live
+  pixels, and the partition cost is skipped. Code: `brick_temporal.TemporalState`,
+  wired in `frame_pipeline.render_frame`.
+- **C -- quantize hysteresis**: with geometry reused, triangle rows are stable,
+  so a per-triangle label memory keeps the previous label unless a different
+  palette entry is better by a relative margin (`--hysteresis`, default 0.1).
+  Code: `brick_color_rt.quantize_nearest_bgr_sticky`.
+- **D (deferred, real machine)** -- disable camera auto-exposure/auto-WB, or
+  brightness-normalise, to attack cause 3 at the source. Not applicable
+  headless.
+
+### Measured result (A+B+C)
+
+Assertions run by `task4_verify.py` (all pass); churn is the fraction of
+pixels whose max channel change exceeds 8 grey levels, which ignores the
+perceptually invisible 1-2/255 palette refinements:
+
+| metric | before | after |
+|---|---|---|
+| palette delta on rebuild, identical input (cold vs warm) | **153** (RNG jump) | **1** |
+| **steady per-frame churn, noise sigma=2** | **2.400%** | **0.064%** (37.7x less) |
+| rebuild-frame churn, identical frames | 0.013% | **0.000%** |
+| rebuild-frame churn, noise sigma=2 | 0.029% | **0.000%** |
+| identical frames, temporal ON | - | 0 churn, 13/14 frames reused |
+| app-level, static input, TOTAL ms (temporal OFF -> ON) | 68.9 | **27.5** |
+| app-level, partition stage ms (temporal OFF -> ON) | 37.7 | **0.2** (reused) |
+
+The 76.7%-of-pixels periodic flash is gone (rebuild is now a refinement, then a
+no-op); the continuous crawl drops by ~38x on realistic sensor noise. The
+app-level static benchmark also shows the reuse side benefit: the partition
+stage disappears (37.7 -> 0.2 ms) and the whole frame is ~2.5x faster.
+
+Correctness is preserved where it must be: with temporal coherence OFF the
+step-4 gates still pass unchanged (partition bit-identical, triangles
+vertex-exact, batched render and whole frame 0 differing pixels). Temporal
+coherence is an explicit, declared behaviour change -- the mosaic intentionally
+stops updating cell boundaries on a still scene -- and its defaults
+(`reuse_thresh=1.0`, `hysteresis=0.1`, `palette_deadband=2.0`) still need
+validation against a real camera's noise and exposure behaviour (no camera in
+this session).
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
