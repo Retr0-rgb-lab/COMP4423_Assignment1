@@ -5,48 +5,48 @@ PDF requirement: "Implement and test the program in a real-world scenario. Call
 the camera to capture images and successfully display their triangle-brick
 representations."
 
-Level 1 is camera capture + display, and this driver does exactly that: the FULL
-Task 3 pipeline runs on every frame with no caching and no approximation, because
-it is the honest baseline the Level 4 before/after comparison is measured against.
+This file is the DRIVER and stays thin (AGENTS 4.1): it parses arguments, owns
+the capture loop, draws the window and prints the stage summary. Everything
+that turns one frame into a rendered mosaic lives in `frame_pipeline.py`
+(FrameConfig / PaletteState / render_frame), so the per-frame engine can be
+benchmarked and verified without a window or a camera.
 
-The window shows BOTH panes: `a) camera input` left, `b) triangle bricks` right,
-live statistics drawn over the render pane. Showing the source beside the result
-is the point -- a mosaic judged without its input says nothing about fidelity.
-It is created with `WINDOW_NORMAL`, so it is resizable by dragging (the default
-`imshow` window is locked to the image's pixel size -- `WND_PROP_AUTOSIZE` is 1.0
--- and cannot be enlarged, which looks tiny on a large monitor). `--window-scale`
-sets the initial size. Close it with the window's X (or q/ESC); X is detected via
-`brick_display.window_closed`.
+Level 1 is camera capture + display, and this driver does exactly that: the
+FULL Task 3 pipeline runs on every frame with no caching of geometry and no
+approximation of colour, because it is the honest baseline the Level 4
+before/after comparison is measured against. The Task 4 speedups (precomputed
+split priorities, vectorised triangles, palette refresh cadence, batched
+render) are exact against that baseline -- see docs/progress/Task4.md.
 
-Per frame: read -> (resize) -> partition -> triangles -> means -> palette ->
-quantize -> render -> compose -> HUD. Stages are timed by `brick_io.StageTimer`
-and the medians are printed at exit, so HUD and report share one measurement path
-(see docs/progress/Task4.md).
+The window shows BOTH panes: `a) camera input` left, `b) triangle bricks`
+right, live statistics drawn over the render pane. Showing the source beside
+the result is the point -- a mosaic judged without its input says nothing
+about fidelity. It is created with `WINDOW_NORMAL`, so it is resizable by
+dragging (the default `imshow` window is locked to the image's pixel size --
+`WND_PROP_AUTOSIZE` is 1.0 -- and cannot be enlarged, which looks tiny on a
+large monitor). `--window-scale` sets the initial size. Close it with the
+window's X (or q/ESC); X is detected via `brick_display.window_closed`.
 
 Usage (Windows venv; WSL has no display, so add --no-show there):
     python code\\camera_app.py                    # default: full 9990 bricks
     python code\\camera_app.py --preset fast      # fewer bricks, higher FPS
     python code\\camera_app.py --no-show --max-frames 30   # benchmark
-Any path you PASS resolves against the current directory (the defaults do not), so
-run from the repo root and pass `code/pics/task4/...`. Keys: q/ESC quit,
+    python code\\camera_app.py --no-show --max-frames 30 \\
+        --input code/pics/sky.jpg                 # offline source (bench/CI)
+Any path you PASS resolves against the current directory (the defaults do not),
+so run from the repo root and pass `code/pics/task4/...`. Keys: q/ESC quit,
 s snapshot, p pause, r reset.
 """
 import argparse
 import os
 import sys
 import time
-from dataclasses import dataclass, field
-from typing import List
 
 import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from brick_geom import pad_to_max, leaves_to_triangles, MAX_TRIANGLES  # noqa: E402
-from brick_quadtree import quadtree_partition  # noqa: E402
-from brick_region_merge import region_merge_partition  # noqa: E402
-from brick_color import build_palette, quantize_nearest_bgr  # noqa: E402
-from brick_render import render_triangles  # noqa: E402
-from brick_means import extract_means, METHODS as MEANS_METHODS  # noqa: E402
+from frame_pipeline import (FrameConfig, PaletteState, render_frame,
+                            MEANS_METHODS, MAX_TRIANGLES)  # noqa: E402
 from brick_io import (save_png, StageTimer, print_stage_summary,
                      open_camera)  # noqa: E402
 from brick_display import (make_side_by_side, composite_size, draw_hud,
@@ -54,7 +54,6 @@ from brick_display import (make_side_by_side, composite_size, draw_hud,
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SNAPSHOT_DIR = os.path.join(HERE, "pics", "task4")
-N_TRI_BUDGET = 9990  # 10-triangle margin under the 10000 cap, same as Task 3
 WINDOW = "Task 4: triangle-brick camera"
 
 # Three points on the measured brick-count / frame-cost curve; the table is in
@@ -62,52 +61,14 @@ WINDOW = "Task 4: triangle-brick camera"
 # a cell is two bricks, so `quality` produces 4995 cells, not 9990.
 #
 # `quality` is the default because the PDF caps bricks at 10000 and grades the
-# output. The previous default (1000 bricks = 498 cells, sizes {8,16,32} only)
-# predates the performance work and had to stay low to be watchable, which is also
-# why the mosaic looked like coarse blocks: at that budget no brick smaller than 8
-# px ever appears. Measured, the full budget costs 216 ms/frame against 73 ms for
-# 498 cells -- 3x the cost for six brick sizes instead of three. `fast` exists for a
-# machine that cannot keep up; it is not the reference configuration.
+# output. Measured, the full budget costs ~216 ms/frame against 73 ms for 498
+# cells (pre-optimization numbers); `fast` exists for a machine that cannot
+# keep up even after the Task 4 optimizations.
 PRESETS = {
-    "quality": {"scale": 1.0, "budget": N_TRI_BUDGET, "k": 16},
+    "quality": {"scale": 1.0, "budget": 9990, "k": 16},
     "balanced": {"scale": 1.0, "budget": 5000, "k": 8},
     "fast": {"scale": 1.0, "budget": 2000, "k": 8},
 }
-
-
-@dataclass
-class FrameConfig:
-    """Settings for the live pipeline; one instance for the whole session.
-
-    Shape/type contract (this is pure config, no arrays):
-      S_set    : list[int] -- allowed cell sizes, powers of two, ascending.
-                 `max(S_set)` is the largest brick side (the Task 3 S_max) and
-                 `min(S_set)` the smallest; both come from `--smax` / `--smin`.
-      K        : int -- palette size; > 3 is the Task 3 requirement.
-      budget   : int -- triangle cap passed to the partitioner. Lowering it is a
-                 legitimate real-time lever, but the value used must be declared
-                 in the report.
-      scale    : float -- resize factor applied to the camera frame before
-                 processing. 1.0 = process at native resolution.
-      means    : "mask" | "fast" | "sample" -- colour extraction method. "mask"
-                 is the slow shipped reference (it also averages a fringe of
-                 neighbouring pixels); "fast" is exact over the triangle's own
-                 pixels; "sample" approximates. See brick_means for measurements.
-      partition/priority/palette_method : names dispatched inside the engine
-                 modules; an unknown value raises there rather than silently
-                 falling back (see brick_quadtree / brick_color).
-    """
-
-    S_set: List[int] = field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
-    K: int = 16
-    budget: int = N_TRI_BUDGET
-    scale: float = 1.0
-    means: str = "fast"
-    sse_impl: str = "sat"
-    n_samples: int = 9
-    partition: str = "quadtree"
-    priority: str = "mse"
-    palette_method: str = "kmeans_lab"
 
 
 def powers_of_two_upto(smax, smin=1):
@@ -130,86 +91,49 @@ def powers_of_two_upto(smax, smin=1):
     return out
 
 
-def render_frame(frame, cfg, timer):
-    """Run the full Task 3 pipeline on one frame; returns (canvas, info).
+def open_input(path):
+    """Open an offline frame source (video file or still image) for benchmarking.
 
-    Function
-    --------
-    Same seven steps as `triangle_brick_task3.run_experiment`, minus the metric
-    suite (metrics are far too slow for a live loop and are not needed to
-    display). No step is cached or approximated in this version.
+    Function: `cv2.VideoCapture` accepts video files AND still images on most
+    backends, but an image "video" yields exactly one frame, so a still image
+    is detected and looped explicitly -- the benchmark then sees N identical
+    frames, which is exactly what the palette-flicker measurement needs. This
+    is what lets the in-app benchmark run headless on machines without a camera
+    (WSL, CI) while using the SAME render_frame + StageTimer path as the live
+    app, so quoted numbers stay comparable.
 
-    Shapes
-    ------
-    Input: `frame` is (H, W, 3) uint8 BGR -- a single camera frame.
-    Intermediate: `padded` is (Hp, Wp, 3) reflect-padded to a multiple of
-    `max(S_set)`; `means` is (T, 3) float32 with `[..., 0]=B`; `palette` is
-    (K, 3) uint8 BGR; `labels` is (T,) uint8 indexing `palette`.
-    Output: `(canvas, processed, info)`.
-      canvas    : (H, W, 3) uint8 BGR -- the rendered mosaic, same size as the
-                  processed input (cropped back from the padded canvas).
-      processed : (H, W, 3) uint8 BGR -- the frame AFTER `--scale` resizing, i.e.
-                  exactly what the pipeline saw. The side-by-side view needs this
-                  rather than the raw camera frame: at `--scale 0.5` the raw frame
-                  is twice the size of the render, and pairing them would misalign
-                  the panes.
-      info      : per-frame statistics for the HUD and the exit summary --
-                  `n_tri`, `n_cells`, `sizes` (cell side -> CELL count),
-                  `palette`, and `t_resize_ms`.
+    Shape: returns `(cap, static_frame)`. `cap` is an open cv2.VideoCapture
+    for video input (static_frame=None), or None for a still image
+    (static_frame is the (H, W, 3) uint8 BGR image to reuse every frame).
+    Raises SystemExit when neither a video nor an image can be read.
     """
-    t_resize = time.perf_counter()
-    if cfg.scale != 1.0:
-        frame = cv2.resize(frame, None, fx=cfg.scale, fy=cfg.scale,
-                           interpolation=cv2.INTER_AREA)
-    t_resize = (time.perf_counter() - t_resize) * 1000.0
-    processed = frame
-
-    with timer.stage("partition"):
-        if cfg.partition == "quadtree":
-            leaves, padded_shape, orig_shape = quadtree_partition(
-                frame, cfg.S_set, cfg.budget, cfg.priority, cfg.sse_impl)
-        else:
-            leaves, padded_shape, orig_shape = region_merge_partition(
-                frame, cfg.S_set, cfg.budget)
-
-    with timer.stage("triangles"):
-        triangles = leaves_to_triangles(leaves)
-        padded, _, _ = pad_to_max(frame, max(cfg.S_set))
-
-    with timer.stage("means"):
-        means = extract_means(padded, leaves, cfg.means, cfg.n_samples)
-
-    with timer.stage("palette"):
-        palette = build_palette(means, cfg.K, cfg.palette_method)
-
-    with timer.stage("quantize"):
-        labels = quantize_nearest_bgr(means, palette)
-
-    with timer.stage("render"):
-        canvas = render_triangles(padded_shape, triangles, labels, palette,
-                                  orig_shape)
-
-    sizes = {}
-    for (_, _, s) in leaves:
-        sizes[s] = sizes.get(s, 0) + 1  # cells, not triangles
-    info = {
-        "n_tri": len(leaves) * 2,
-        "n_cells": len(leaves),
-        "sizes": sizes,
-        "palette": palette,
-        "t_resize_ms": t_resize,
-    }
-    return canvas, processed, info
+    cap = cv2.VideoCapture(path)
+    if cap.isOpened():
+        # An image file also "opens" as a capture and yields its single frame,
+        # but seeking back to 0 then fails on several backends -- so treat a
+        # one-frame source as a still image explicitly.
+        n_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        ok, first = cap.read()
+        if ok and first is not None and n_frames > 1:
+            return cap, None
+        cap.release()
+    img = cv2.imread(path)
+    if img is None:
+        raise SystemExit(
+            f"[task4] --input {path}: not readable as a video or an image")
+    print(f"[task4] --input is a still image; looping it")
+    return None, img
 
 
 def main():
-    """CLI entry: parse args, open the camera, run the loop, print the summary.
+    """CLI entry: parse args, open the source, run the loop, print the summary.
 
-    Shape: frames are (H, W, 3) uint8 BGR at whatever the camera yields, resized
+    Shape: frames are (H, W, 3) uint8 BGR at whatever the source yields, resized
     by `cfg.scale`; no array escapes the loop except saved snapshots.
     Semantics: `--no-show` skips `imshow` and `waitKey`, which is what makes the
     loop runnable headless (WSL/CI) -- combined with `--max-frames` it becomes a
-    deterministic benchmark with no window and no keyboard. Without
+    deterministic benchmark with no window and no keyboard. `--input` replaces
+    the camera with a file so the same benchmark runs without hardware. Without
     `--max-frames` the loop runs until the user quits.
     """
     p = argparse.ArgumentParser(
@@ -224,10 +148,13 @@ def main():
 
     p.add_argument("--preset", choices=list(PRESETS), default=preset_name,
                    help="brick-count ladder, measured at 640x480 per frame: "
-                        "quality=9990 bricks/K16 (default, ~216 ms), "
-                        "balanced=5000/K8 (~137 ms), fast=2000/K8 (~84 ms). "
+                        "quality=9990 bricks/K16 (default), "
+                        "balanced=5000/K8, fast=2000/K8. "
                         "Any explicit flag below overrides it.")
     p.add_argument("--camera", type=int, default=0, help="camera index")
+    p.add_argument("--input", default=None, metavar="PATH",
+                   help="offline frame source (video file or still image) "
+                        "instead of the camera; enables headless benchmarks")
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
     p.add_argument("--scale", type=float, default=pre["scale"],
@@ -239,9 +166,15 @@ def main():
     p.add_argument("--k", type=int, default=pre["k"], help="palette size (>3)")
     p.add_argument("--means", choices=list(MEANS_METHODS), default="fast",
                    help="per-triangle colour method; 'mask' is the slow shipped")
-    p.add_argument("--sse", dest="sse_impl", choices=["sat", "ref"], default="sat",
-                   help="quadtree split-priority implementation; 'ref' is the "
-                        "original per-candidate numpy version (same bricks, slower)")
+    p.add_argument("--sse", dest="sse_impl",
+                   choices=["precomp", "sat", "ref"], default="precomp",
+                   help="quadtree split-priority implementation; 'precomp' "
+                        "(default) is bit-identical to 'sat' for mse and much "
+                        "faster; 'ref' is the original per-candidate numpy")
+    p.add_argument("--palette-refresh", type=int, default=10, metavar="N",
+                   help="rebuild the K-Means palette every N frames, reuse it "
+                        "otherwise (1 = every frame, the old behaviour; the "
+                        "default 10 removes the palette flicker)")
     p.add_argument("--n-samples", type=int, default=9,
                    help="interior points per triangle when --means sample")
     p.add_argument("--partition", choices=["quadtree", "region_merge"],
@@ -271,20 +204,33 @@ def main():
         S_set=powers_of_two_upto(args.smax, args.smin),
         K=args.k, budget=args.budget, scale=args.scale, means=args.means,
         n_samples=args.n_samples, sse_impl=args.sse_impl,
-        partition=args.partition, priority=args.priority,
-        palette_method=args.palette_method,
+        palette_refresh=args.palette_refresh, partition=args.partition,
+        priority=args.priority, palette_method=args.palette_method,
     )
 
     print(f"[task4] S_set={cfg.S_set} K={cfg.K} partition={cfg.partition} "
           f"priority={cfg.priority} palette={cfg.palette_method} "
-          f"means={cfg.means} sse={cfg.sse_impl}")
-    cap = open_camera(args.camera, args.width, args.height)
-    ok, frame = cap.read()
-    if not ok or frame is None:
-        cap.release()
-        raise SystemExit("[task4] camera opened but returned no frame")
-    print(f"[task4] camera {args.camera}: {frame.shape[1]}x{frame.shape[0]}  "
-          f"scale={cfg.scale}")
+          f"means={cfg.means} sse={cfg.sse_impl} "
+          f"palette_refresh={cfg.palette_refresh}")
+    cap, static_frame = None, None
+    if args.input:
+        cap, static_frame = open_input(args.input)
+        first = static_frame if static_frame is not None else None
+        if first is None:
+            # VideoCapture is positioned after its probe read; rewind so frame 1
+            # of the loop is the file's first frame.
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, first = cap.read()
+            if not ok or first is None:
+                raise SystemExit(f"[task4] --input {args.input}: no frames")
+    else:
+        cap = open_camera(args.camera, args.width, args.height)
+        ok, first = cap.read()
+        if not ok or first is None:
+            cap.release()
+            raise SystemExit("[task4] camera opened but returned no frame")
+    print(f"[task4] source {'file ' + args.input if args.input else 'camera ' + str(args.camera)}: "
+          f"{first.shape[1]}x{first.shape[0]}  scale={cfg.scale}")
 
     # Seed OpenCV's RNG once so the K-Means palette is reproducible for the same
     # frame content; without this the palette can drift between sessions and the
@@ -296,7 +242,7 @@ def main():
         # window is locked to the image's pixel size, so on a large monitor the
         # two panes look tiny and there is no way to enlarge them.
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-        pane = frame.shape[:2]
+        pane = first.shape[:2]
         if cfg.scale != 1.0:
             pane = (int(pane[0] * cfg.scale), int(pane[1] * cfg.scale))
         vh, vw = composite_size(pane)
@@ -306,18 +252,24 @@ def main():
               f"(x{args.window_scale}); drag its edges to resize")
 
     timer = StageTimer()
+    palette_state = PaletteState(cfg.palette_refresh)
     snapshots, paused, fps = 0, False, 0.0
+    frame = first  # so a paused first iteration has a frame to re-render
     n_frames, t_start = 0, time.perf_counter()
     t_prev = t_start
 
     try:
         while True:
             if not paused:
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    print("[task4] frame read failed; stopping")
-                    break
-            canvas, processed, info = render_frame(frame, cfg, timer)
+                if static_frame is not None:
+                    frame = static_frame
+                else:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        print("[task4] frame read failed; stopping")
+                        break
+            canvas, processed, info = render_frame(frame, cfg, timer,
+                                                   palette_state)
 
             # FPS is the FULL loop period (read + process + display), so the
             # timestamp must be taken AFTER the work, not right after `read`.
@@ -385,12 +337,15 @@ def main():
             if args.max_frames and n_frames >= args.max_frames:
                 break
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         if not args.no_show:
             cv2.destroyAllWindows()
         print_stage_summary(timer, n_frames, time.perf_counter() - t_start,
                             context={"scale": cfg.scale, "budget": cfg.budget,
-                                     "S_set": cfg.S_set, "K": cfg.K})
+                                     "S_set": cfg.S_set, "K": cfg.K,
+                                     "sse": cfg.sse_impl,
+                                     "palette_refresh": cfg.palette_refresh})
 
 
 if __name__ == "__main__":

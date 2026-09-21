@@ -203,3 +203,55 @@ def leaves_to_triangles(leaves):
             triangles.append(np.array([tl, tr, bl], dtype=np.int32))
             triangles.append(np.array([tr, br, bl], dtype=np.int32))
     return triangles
+
+
+# Vertex offsets relative to a cell's top-left corner, per parity and half,
+# mirroring the two branches of `leaves_to_triangles` exactly. Entry [v, 0] is
+# the x offset of vertex v, [v, 1] the y offset. Kept module-level so the two
+# halves of `leaves_to_triangles_array` read as the same geometry, unrolled.
+_OFF = {
+    0: (np.array([[0, 0], [1, 0], [1, 1]], dtype=np.int64),   # half a, diag TL->BR
+        np.array([[0, 0], [1, 1], [0, 1]], dtype=np.int64)),  # half b
+    1: (np.array([[0, 0], [1, 0], [0, 1]], dtype=np.int64),   # half a, diag TR->BL
+        np.array([[1, 0], [1, 1], [0, 1]], dtype=np.int64)),  # half b
+}
+
+
+def leaves_to_triangles_array(leaves):
+    """Vectorised `leaves_to_triangles`: same geometry/order, one (T, 3, 2) array.
+
+    Function
+    --------
+    Task 4 optimization D1. The per-triangle loop builds 9990 small ndarrays
+    per frame (~13 ms); bucketing the leaves by (size, parity) and adding
+    broadcast offset blocks builds ALL triangles in a handful of numpy ops per
+    bucket instead. Diagonal convention, per-cell parity, half ordering and
+    vertex order are exactly those of `leaves_to_triangles` — row 2k / 2k+1 is
+    still leaf k's half a / half b, so the ordering contract with
+    `brick_means.extract_means` and `brick_render.render_triangles_batched`
+    (which consumes this array row-wise) is unchanged.
+
+    Shapes
+    ------
+    Input:  `leaves` — list of (x, y, size), padded coordinates, any order.
+    Intermediate: per (size, parity) bucket with n cells, `orig` is (n, 1, 2)
+    origins and `off` a (3, 2) offset block; the sum broadcasts to (n, 3, 2).
+    Output: (2*len(leaves), 3, 2) int32 — `out[t, v, 0]=x (column)`,
+            `out[t, v, 1]=y (row)` for vertex v of triangle t, same content as
+            `np.stack(leaves_to_triangles(leaves))`.
+    """
+    leaves = list(leaves)
+    out = np.empty((2 * len(leaves), 3, 2), dtype=np.int32)
+    buckets = {}
+    for k, (x, y, s) in enumerate(leaves):
+        par = (y // s + x // s) % 2
+        buckets.setdefault((s, par), []).append(k)
+    for (s, par), idx in buckets.items():
+        idx = np.asarray(idx, dtype=np.int64)
+        # origins[i] = (x, y) of leaf idx[i], shape (n, 1, 2) for broadcasting
+        origins = np.array([[leaves[k][0], leaves[k][1]] for k in idx],
+                           dtype=np.int64)[:, None, :]
+        off_a, off_b = _OFF[par]
+        out[2 * idx] = origins + off_a * s
+        out[2 * idx + 1] = origins + off_b * s
+    return out

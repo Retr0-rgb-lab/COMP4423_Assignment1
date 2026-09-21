@@ -103,3 +103,85 @@ def render_triangles(canvas_shape, triangles, labels, palette_bgr, orig_shape=No
         oH, oW = orig_shape
         canvas = canvas[:oH, :oW]
     return canvas
+
+
+def render_triangles_batched(canvas_shape, triangles, labels, palette_bgr,
+                             orig_shape=None):
+    """Fill + border the whole mosaic in at most K+1 cv2 calls (Task 4 opt A).
+
+    Function
+    --------
+    `labels` partitions the triangles into at most K colour groups, and
+    `cv2.fillPoly` paints ANY number of same-colour polygons per call, so the
+    whole fill pass is <=K calls instead of one call per triangle. The border
+    colour is constant, so ONE `cv2.polylines` call draws every outline. This
+    removes the per-triangle Python->cv2 crossing cost (~20000 calls per frame
+    at 9990 triangles), which was ~25% of the live frame.
+
+    Order note (why the output is not byte-identical to `render_triangles`):
+    fills now run colour-group by colour-group instead of triangle by
+    triangle. Triangle interiors are disjoint, so only the 1-pixel
+    right/bottom `fillPoly` fringe (see `brick_means` for the measured leak)
+    can differ on shared edges, and the single border pass at the end repaints
+    every exact boundary line BORDER_COLOR_BGR. The visible mosaic differs
+    only on sub-boundary fringe pixels; Delta-E / PSNR against the source are
+    unchanged in practice (asserted by `task4_verify.py`).
+
+    Shapes
+    ------
+    Input:
+      canvas_shape : (H, W) — working canvas size (padded extent).
+      triangles    : (T, 3, 2) int32 ndarray — ALL triangles stacked, OpenCV
+                     point order (x, y); row t is triangles[t]. This is what
+                     `brick_geom.leaves_to_triangles_array` returns.
+      labels       : (T,) int ndarray — palette index per triangle, [0, K-1].
+      palette_bgr  : (K, 3) uint8 ndarray — `palette_bgr[k]` is the BGR colour
+                     of palette index k.
+      orig_shape   : optional (oH, oW) crop target, same as `render_triangles`.
+    Intermediate:
+      order        : (T,) int64 — argsort of `labels` (stable), so triangles of
+                     one colour stay in geometry order within their group.
+      groups       : list of (M_g,) index arrays, one per present label.
+      canvas[g]    : (M_g, 3, 2) int32 view passed to one fillPoly call.
+    Output:
+      canvas       : (H, W, 3) uint8 BGR, cropped to orig_shape when given;
+                     border drawn ON TOP exactly like `render_triangles`.
+
+    Raises: ValueError if `triangles` is not a (T, 3, 2) ndarray — the batched
+    path is defined for the vectorised geometry only; callers holding a list of
+    per-triangle arrays use `render_triangles`.
+    """
+    tri = np.asarray(triangles)
+    if tri.ndim != 3 or tri.shape[1:] != (3, 2):
+        raise ValueError(
+            f"triangles must be a (T, 3, 2) ndarray, got shape {triangles.shape}")
+
+    H, W = canvas_shape
+    canvas = np.zeros((H, W, 3), dtype=np.uint8)
+
+    # Group triangle indices by palette label without a Python loop over K:
+    # argsort + split-on-change gives the label groups in ascending label
+    # order, each group a contiguous slice of the sorted index array.
+    labels = np.asarray(labels)
+    order = np.argsort(labels, kind="stable")
+    sorted_lab = labels[order]
+    change = np.flatnonzero(np.diff(sorted_lab)) + 1
+    groups = np.split(order, change)  # empty `change` -> [order], one group
+
+    for grp in groups:
+        if grp.size == 0:
+            continue
+        color = tuple(int(v) for v in palette_bgr[labels[grp[0]]])
+        # One call paints every triangle of this colour; interiors are
+        # disjoint so group order does not matter for the fill itself.
+        cv2.fillPoly(canvas, tri[grp], color)
+
+    # Single border pass over ALL triangles, identical colour and thickness
+    # to the per-triangle loop in render_triangles.
+    cv2.polylines(canvas, tri, isClosed=True, color=BORDER_COLOR_BGR,
+                  thickness=1, lineType=cv2.LINE_8)
+
+    if orig_shape is not None:
+        oH, oW = orig_shape
+        canvas = canvas[:oH, :oW]
+    return canvas

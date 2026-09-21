@@ -3,6 +3,16 @@ brick_quadtree — top-down quadtree tessellation.
 
 Public entry point: `quadtree_partition`.
 Internal helpers:   `_quadtree_priority`, `_region_mse`, `_region_sobel_var`.
+Precomputed maps:   `brick_prio.priority_maps` / `prio_from_maps` (opt B).
+
+Three split-priority implementations (`impl=`):
+  "sat"     — batched summed-area-table queries, one small batch per split
+              (default; bit-identical to "ref" for the "mse" priority).
+  "ref"     — original per-candidate numpy region means (slow, for A/B only).
+  "precomp" — Task 4 optimization B: every candidate priority is a pure
+              function of the image, so the whole universe is scored up front
+              in a few batched calls and the greedy loop runs with zero numpy
+              calls. Bit-identical leaves to "sat" for "mse".
 """
 import heapq
 import time
@@ -14,6 +24,7 @@ from skimage import filters
 from brick_geom import MAX_TRIANGLES, pad_to_max
 from brick_sat import (build_sats, rect_sse_total_many,
                        rect_sobel_var_many)
+from brick_prio import priority_maps, prio_from_maps
 
 
 def _region_mse(region):
@@ -145,7 +156,7 @@ def _quadtree_priorities_sat(bundle, leaves, priority):
 
 
 def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
-                       impl="sat"):
+                       impl="sat", return_padded=False):
     """Top-down quadtree + greedy priority queue (rate-distortion optimisation).
 
     Function
@@ -172,13 +183,18 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
                      split, so the cost stops scaling with region area rather than
                      with numpy call count. "ref" keeps the original
                      per-candidate numpy means and exists so the two can be
-                     measured against each other. For the default "mse" priority
-                     the decision rule is numerically IDENTICAL, so impl is a pure
-                     speed knob (measured 3.0x on that stage at 9990 bricks, same
-                     bricks out). For "edgef1" it is NOT identical: the tables come
-                     from a single global Sobel map, whereas the reference runs
-                     Sobel per region and so reflects at each region's border; a
-                     warning is printed in that combination.
+                     measured against each other. "precomp" (Task 4) scores the
+                     whole candidate universe up front in a few large batched
+                     queries and runs the greedy heap loop with zero numpy calls;
+                     bit-identical to "sat" for "mse", and "mse" only.
+                     For the default "mse" priority the decision rule is
+                     numerically IDENTICAL across all three, so impl is a pure
+                     speed knob. For "edgef1" only "sat"/"ref" are valid: the
+                     precomputed maps carry no Sobel information.
+      return_padded: when True, also return the padded image as a 4th element,
+                     so a caller that needs padded pixels for a later stage
+                     (e.g. the live loop's mean extraction) does not pad twice.
+                     Default False keeps the original 3-tuple for Task 2/3.
     Intermediate:
       leaves : set of (x, y, size) -- the cells that currently exist, in PADDED
                coordinates. Membership only; the SSE of a cell is recomputed on
@@ -188,10 +204,13 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
                heapq is a min-heap; we want to pop the LARGEST priority
                first so we negate on push and re-negate on pop.
     Output:
-      (leaves_keys, padded_shape, orig_shape):
+      (leaves_keys, padded_shape, orig_shape) — or with `return_padded=True`,
+      (leaves_keys, padded_shape, orig_shape, padded):
         leaves_keys    : list of (x, y, size) — final adaptive cells.
         padded_shape   : (Hp, Wp) — padded image extent.
         orig_shape     : (H, W) — original input size for later crop.
+        padded         : (Hp, Wp, 3) uint8 — the padded image (only when
+                         return_padded=True).
     """
     # Validate up front: this is the only guard on `priority`, and a silent
     # fallback to "mse" would relabel an experiment without any metric showing
@@ -199,8 +218,13 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
     if priority not in ("mse", "edgef1"):
         raise ValueError(
             f"Unknown priority {priority!r}; expected 'mse' or 'edgef1'.")
-    if impl not in ("sat", "ref"):
-        raise ValueError(f"Unknown impl {impl!r}; expected 'sat' or 'ref'.")
+    if impl not in ("sat", "ref", "precomp"):
+        raise ValueError(
+            f"Unknown impl {impl!r}; expected 'sat', 'ref' or 'precomp'.")
+    if impl == "precomp" and priority != "mse":
+        raise ValueError("impl='precomp' supports priority='mse' only "
+                         "(it precomputes delta-SSE maps; edgef1 needs the "
+                         "Sobel tables -- use impl='sat' for edgef1).")
 
     padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
@@ -225,11 +249,39 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
     if n_tri > max_triangles:
         print(f"    [qt] starting grid over budget; falling back to region_merge")
         from brick_region_merge import region_merge_partition
-        return region_merge_partition(img, S_set, max_triangles)
+        res = region_merge_partition(img, S_set, max_triangles)
+        # `padded` is the same array region_merge recomputes internally (same
+        # input, same S_max), so handing it back costs nothing and lets the
+        # caller skip a duplicate pad_to_max.
+        if return_padded:
+            return (*res, padded)
+        return res
 
-    # One O(H*W) pass builds the tables every priority query then reads in O(1).
-    # `with_sobel` is only paid for when the priority actually needs it.
-    if impl == "sat":
+    # --- priority source ---------------------------------------------------
+    # One of three implementations, all honouring the same batch contract
+    # `prio_get(leaves) -> sequence of floats aligned with leaves`:
+    if impl == "precomp":
+        # Task 4 optimization B: score the whole candidate universe up front
+        # (~log2(S_max) large batched reductions), then run the greedy loop
+        # with zero numpy calls. Values are bit-identical to the sat path (see
+        # brick_prio: exact-integer sums make any order identical), so the
+        # heap sees the same keys in the same order and the resulting leaves
+        # set is identical -- this is a pure speed change.
+        _, prio_map = priority_maps(padded, S_set)
+        pmap = {s: m.tolist() for s, m in prio_map.items()}
+        print(f"    [qt] impl=precomp: "
+              f"{sum(m.size for m in prio_map.values())} candidate priorities "
+              f"precomputed ({time.time()-t0:.2f}s)")
+
+        def prio_get(lfs):
+            """Precomputed priorities for a batch of leaves (list in/out).
+
+            Shape/semantics: `lfs` is an iterable of `(x, y, size)` in padded
+            coordinates; returns a list of floats aligned with it, read from
+            the precomputed per-size lists. Zero numpy calls per leaf.
+            """
+            return [prio_from_maps(pmap, lf) for lf in lfs]
+    elif impl == "sat":
         if priority == "edgef1":
             # The reference runs Sobel per region, which reflects at the region
             # boundary; this runs it once globally. The values differ near region
@@ -240,29 +292,29 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
                   "not numerically equal to the per-region reference")
         bundle = build_sats(padded, with_sobel=(priority == "edgef1"))
 
-        def leaf_priorities(lfs):
+        def prio_get(lfs):
             """Table-backed priorities for a batch of leaves, in one query.
 
             Shape/semantics: `lfs` is an iterable of `(x, y, size)` in padded
             coordinates; returns a (N,) float64 array aligned with it, as
-            documented on `_quadtree_priorities_sat`. Bound to the tables and the
-            priority string so the main loop can be written once for both
+            documented on `_quadtree_priorities_sat`. Bound to the tables and
+            the priority string so the main loop is written once for all
             implementations instead of duplicating the split logic.
             """
             return _quadtree_priorities_sat(bundle, lfs, priority)
     else:
-        def leaf_priorities(lfs):
+        def prio_get(lfs):
             """Reference priorities for a batch of leaves, one call per leaf.
 
             Shape/semantics: same contract as the table-backed version, but N
-            separate numpy passes over the region -- kept so the two
+            separate numpy passes over the region -- kept so the three
             implementations can be timed against each other from the same loop.
             """
             return [_quadtree_priority(padded, lf, priority) for lf in lfs]
 
     heap = []
     seed = list(leaves)
-    for leaf, p in zip(seed, leaf_priorities(seed)):
+    for leaf, p in zip(seed, prio_get(seed)):
         heapq.heappush(heap, (-p, leaf))
 
     iters = 0
@@ -280,11 +332,17 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
                     (x, y + half, half), (x + half, y + half, half)]
         leaves.discard(leaf)
         n_tri += 6  # 1 cell (2 tri) -> 4 cells (8 tri)
-        for c, p in zip(children, leaf_priorities(children)):
+        for c, p in zip(children, prio_get(children)):
             leaves.add(c)
             heapq.heappush(heap, (-p, c))
         iters += 1
 
     print(f"    [qt] done: splits={iters}, n_tri={n_tri}, cells={len(leaves)} "
           f"({time.time()-t0:.2f}s)")
+    if return_padded:
+        # Task 4 optimization D1: the caller (frame_pipeline.render_frame)
+        # needs the padded image for the means stage; handing it back removes
+        # the duplicate pad_to_max the live loop used to pay. Optional so the
+        # Task 2/3 callers keep their 3-tuple contract untouched.
+        return list(leaves), (Hp, Wp), orig_shape, padded
     return list(leaves), (Hp, Wp), orig_shape
