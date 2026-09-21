@@ -77,6 +77,15 @@ class FrameConfig:
                  quantizer (0 = plain nearest, 0.1 = 10% dead-band).
       max_reuse : int -- force a re-partition after this many reused frames
                  (0 = never; the signature test alone decides).
+      freeze_colour_on_reuse : bool -- when the partition is reused, also keep
+                 the previous labels and canvas instead of re-extracting means
+                 and re-quantizing. A static scene then renders byte-identical
+                 frame to frame (no colour jitter at all) and the means /
+                 palette / quantize / render stages are skipped entirely. It
+                 assumes the camera exposure is stable: pair it with
+                 `--lock-ae` (camera_app) so brightness cannot drift inside the
+                 reuse window; a genuine scene change still breaks the reuse and
+                 triggers a full refresh.
       partition/priority/palette_method : names dispatched inside the engine
                  modules; an unknown value raises there rather than silently
                  falling back (see brick_quadtree / brick_color).
@@ -95,9 +104,30 @@ class FrameConfig:
     reuse_thresh: float = 1.0
     hysteresis: float = 0.1
     max_reuse: int = 0
+    freeze_colour_on_reuse: bool = True
     partition: str = "quadtree"
     priority: str = "mse"
     palette_method: str = "kmeans_lab"
+
+
+def powers_of_two_upto(smax, smin=1):
+    """[smin, 2*smin, ..., smax] as the sorted power-of-two family.
+
+    Function: builds the S_set the partitioners require. The quadtree splits by
+    halving and region_merge validates `S_max/S_min` is a power of two, so a
+    non-power-of-two input would otherwise fail deep inside the engine.
+
+    Shape: ints in, `list[int]` out, ascending, always containing `smin` and the
+    largest power of two <= `smax`. Semantics: element i is the cell side in
+    pixels; `out[-1]` is the largest brick size this session can produce.
+    """
+    if smin < 1 or smax < smin:
+        raise ValueError(f"need 1 <= smin <= smax, got smin={smin} smax={smax}")
+    out, s = [], smin
+    while s <= smax:
+        out.append(s)
+        s *= 2
+    return out
 
 
 class PaletteState:
@@ -236,6 +266,33 @@ def render_frame(frame, cfg, timer, palette_state, temporal_state=None):
     temporal_on = temporal_state is not None and temporal_state.enabled
     reuse = temporal_on and temporal_state.can_reuse(frame)
 
+    if (reuse and cfg.freeze_colour_on_reuse
+            and temporal_state.canvas is not None
+            and temporal_state.render_labels is not None):
+        # FROZEN frame: keep the previous labels AND canvas exactly. Nothing is
+        # re-extracted or re-quantized, so an unchanged scene is byte-identical
+        # frame to frame (this is what removes residual colour jitter) and the
+        # partition/means/palette/quantize/render stages are all skipped. Safe
+        # only while the camera exposure is steady -- see the FrameConfig note.
+        temporal_state.note_reuse()
+        temporal_state.prev_labels = temporal_state.render_labels
+        leaves = temporal_state.leaves
+        sizes = {}
+        for (_, _, s) in leaves:
+            sizes[s] = sizes.get(s, 0) + 1  # cells, not triangles
+        info = {
+            "n_tri": len(leaves) * 2,
+            "n_cells": len(leaves),
+            "sizes": sizes,
+            "palette": temporal_state.render_palette,
+            "palette_refreshed": False,
+            "reused": True,
+            "render_reused": True,
+            "colour_frozen": True,
+            "t_resize_ms": t_resize,
+        }
+        return temporal_state.canvas, processed, info
+
     with timer.stage("partition"):
         if reuse:
             # Scene static: keep the cached cells; only re-pad THIS frame so
@@ -309,6 +366,7 @@ def render_frame(frame, cfg, timer, palette_state, temporal_state=None):
         "palette_refreshed": refreshed,
         "reused": reuse,
         "render_reused": render_reused,
+        "colour_frozen": False,
         "t_resize_ms": t_resize,
     }
     return canvas, processed, info

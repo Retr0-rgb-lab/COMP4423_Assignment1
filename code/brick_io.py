@@ -202,17 +202,26 @@ def print_stage_summary(timer, n_frames, wall_s, context=None):
           f"{rep['__total__']['mean_ms']:10.1f}   (excludes camera read)")
 
 
-def open_camera(index, width=None, height=None):
+def open_camera(index, width=None, height=None, lock_ae=False, exposure=None,
+                lock_wb=False):
     """Open camera `index`, optionally forcing the capture resolution.
 
     Function: `cv2.VideoCapture` with the DirectShow backend on Windows (MSMF
     often refuses to apply a requested size on laptops). Raises rather than
     returning a closed handle, so a busy or absent device fails loudly.
+    Optionally turns OFF auto-exposure and/or auto-white-balance: a drifting
+    exposure is the strongest source of frame-to-frame colour change and it
+    defeats any temporal colour stabilisation downstream, so locking it at the
+    source is the cleanest fix.
 
     Shape: returns a `cv2.VideoCapture` whose frames are (H, W, 3) uint8 BGR.
     Semantics: `width`/`height`, when given, are REQUESTS -- the driver may
     ignore them, so the caller must read back the actual size from the frames
-    instead of assuming.
+    instead of assuming. `lock_ae`/`lock_wb` are also requests and are
+    backend-specific: `CAP_PROP_AUTO_EXPOSURE` uses 0.25 for manual and 0.75 for
+    auto on DirectShow, but other backends use 0/1, so the applied values are
+    READ BACK and printed for the operator to check. `exposure` is only sent
+    when `lock_ae` is set and it is not None.
     """
     backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
     cap = cv2.VideoCapture(index, backend)
@@ -224,4 +233,17 @@ def open_camera(index, width=None, height=None):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     if height:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    if lock_ae:
+        # 0.25 = manual, 0.75 = auto on DirectShow; some backends use 0/1.
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+        if exposure is not None:
+            cap.set(cv2.CAP_PROP_EXPOSURE, float(exposure))
+    if lock_wb:
+        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+    if lock_ae or lock_wb:
+        print("[task4] camera ctrl readback: AUTO_EXPOSURE=%.3f EXPOSURE=%.3f "
+              "AUTO_WB=%.3f (backend-specific; verify these are the manual "
+              "values)" % (cap.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+                           cap.get(cv2.CAP_PROP_EXPOSURE),
+                           cap.get(cv2.CAP_PROP_AUTO_WB)))
     return cap

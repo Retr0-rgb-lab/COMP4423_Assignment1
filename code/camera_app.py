@@ -46,7 +46,8 @@ import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from frame_pipeline import (FrameConfig, PaletteState, render_frame,
-                            MEANS_METHODS, MAX_TRIANGLES)  # noqa: E402
+                            MEANS_METHODS, MAX_TRIANGLES,
+                            powers_of_two_upto)  # noqa: E402
 from brick_temporal import TemporalState  # noqa: E402
 from brick_io import (save_png, StageTimer, print_stage_summary,
                      open_camera)  # noqa: E402
@@ -72,25 +73,6 @@ PRESETS = {
     "fast": {"scale": 1.0, "budget": 2000, "k": 8},
 }
 
-
-def powers_of_two_upto(smax, smin=1):
-    """[smin, 2*smin, ..., smax] as the sorted power-of-two family.
-
-    Function: builds the S_set the partitioners require. The quadtree splits by
-    halving and region_merge validates `S_max/S_min` is a power of two, so a
-    non-power-of-two input would otherwise fail deep inside the engine.
-
-    Shape: ints in, `list[int]` out, ascending, always containing `smin` and the
-    largest power of two <= `smax`. Semantics: element i is the cell side in
-    pixels; `out[-1]` is the largest brick size this session can produce.
-    """
-    if smin < 1 or smax < smin:
-        raise ValueError(f"need 1 <= smin <= smax, got smin={smin} smax={smax}")
-    out, s = [], smin
-    while s <= smax:
-        out.append(s)
-        s *= 2
-    return out
 
 
 def open_input(path):
@@ -159,6 +141,15 @@ def main():
                         "instead of the camera; enables headless benchmarks")
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
+    p.add_argument("--lock-ae", action="store_true",
+                   help="turn OFF camera auto-exposure before the loop; a "
+                        "drifting exposure is the strongest source of colour "
+                        "jitter (ignored for --input)")
+    p.add_argument("--exposure", type=float, default=None, metavar="E",
+                   help="manual exposure value to set with --lock-ae "
+                        "(backend-specific units; omit to keep the current one)")
+    p.add_argument("--lock-wb", action="store_true",
+                   help="turn OFF camera auto-white-balance (ignored for --input)")
     p.add_argument("--scale", type=float, default=pre["scale"],
                    help="resize factor applied before processing (speed lever)")
     p.add_argument("--budget", type=int, default=pre["budget"],
@@ -196,6 +187,12 @@ def main():
                    help="label dead-band: keep a cell's colour unless another "
                         "palette entry is better by this relative margin "
                         "(0 = plain nearest colour)")
+    p.add_argument("--freeze-colour-on-reuse", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="when the partition is reused, also keep the previous "
+                        "labels/canvas (default on): a static scene then "
+                        "renders byte-identical and the means/palette/quantize/"
+                        "render stages are skipped. Pair with --lock-ae")
     p.add_argument("--max-reuse", type=int, default=0, metavar="N",
                    help="force a re-partition after N reused frames (0 = never; "
                         "the scene-change test alone decides)")
@@ -232,6 +229,7 @@ def main():
         palette_deadband=args.palette_deadband, temporal=args.temporal,
         reuse_thresh=args.reuse_thresh, hysteresis=args.hysteresis,
         max_reuse=args.max_reuse, partition=args.partition,
+        freeze_colour_on_reuse=args.freeze_colour_on_reuse,
         priority=args.priority, palette_method=args.palette_method,
     )
 
@@ -252,7 +250,9 @@ def main():
             if not ok or first is None:
                 raise SystemExit(f"[task4] --input {args.input}: no frames")
     else:
-        cap = open_camera(args.camera, args.width, args.height)
+        cap = open_camera(args.camera, args.width, args.height,
+                          lock_ae=args.lock_ae, exposure=args.exposure,
+                          lock_wb=args.lock_wb)
         ok, first = cap.read()
         if not ok or first is None:
             cap.release()

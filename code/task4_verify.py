@@ -266,29 +266,31 @@ def check_temporal(identical, noisy, cfg, reps):
         tstate = TemporalState(cfg.temporal and temporal_on, cfg.reuse_thresh,
                                cfg.hysteresis, cfg.max_reuse)
         prev, prev_pal = None, None
-        steady, flash, reused = [], [], 0
+        steady, flash, reused, frozen = [], [], 0, 0
         for f in frames:
             canvas, _, info = render_frame(f, cfg, StageTimer(), pal_state,
                                            tstate)
             if info["reused"]:
                 reused += 1
+            if info.get("colour_frozen"):
+                frozen += 1
             if prev is not None:
                 c = churn(canvas, prev)
                 (flash if info["palette_refreshed"] else steady).append(c)
             prev, prev_pal = canvas, info["palette"]
-        return steady, flash, reused, tstate.render_hits
+        return steady, flash, reused, frozen, tstate.render_hits
 
     rows = {}
     for name, seq in (("identical", identical), ("noisy", noisy)):
         for temporal_on in (False, True):
-            steady, flash, re, rh = run_sequence(seq, temporal_on)
-            rows[(name, temporal_on)] = (steady, flash, re, rh)
+            steady, flash, re, fr, rh = run_sequence(seq, temporal_on)
+            rows[(name, temporal_on)] = (steady, flash, re, fr, rh)
             print(f"  [B/C] {name:9s} temporal={'ON ' if temporal_on else 'OFF'} "
                   f"| steady churn {np.mean(steady)*100:6.3f}% "
                   f"| rebuild-frame churn "
                   f"{(max(flash) if flash else 0.0)*100:6.3f}% "
                   f"| reused {re}/{len(seq)} "
-                  f"| canvas cached {rh}/{len(seq)}")
+                  f"| colour-frozen {fr}/{len(seq)}")
 
     # Assertions: temporal ON must freeze a static scene and cut the churn.
     # The rebuild-frame bound is 0.1%, not 0: a warm-started entry can still
@@ -299,7 +301,10 @@ def check_temporal(identical, noisy, cfg, reps):
     assert (max(id_on[1]) if id_on[1] else 0.0) < 0.001, \
         "warm-started rebuild still visibly churns identical frames"
     assert id_on[2] == len(identical) - 1, "static frames were not all reused"
-    assert id_on[3] > 0, "render reuse (opt E) never fired on a static scene"
+    # The canvas is reused either via the frozen-colour path or via the
+    # byte-identical render cache; at least one must cover the static frames.
+    assert id_on[3] + id_on[4] >= len(identical) - 1, \
+        "no canvas reuse (frozen or cached) on a static scene"
     noisy_off, noisy_on = rows[("noisy", False)], rows[("noisy", True)]
     assert np.mean(noisy_on[0]) < np.mean(noisy_off[0]), \
         "temporal coherence did not reduce per-frame churn"
