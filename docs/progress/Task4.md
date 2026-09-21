@@ -1017,6 +1017,62 @@ Limitation: the live window cannot be exercised headless in this session, so
 the fit is verified on a simulation plus image inspection; the actual drag
 behaviour needs the author's machine.
 
+## Level 3, step 8: reuse freezes colour + camera AE/WB lock (attempt)
+
+**Context.** After A+B+C a static scene still showed residual colour churn
+(measured 0.101% of pixels per frame on a noise sequence) because means and
+quantize were re-run every frame even when the partition was reused; camera
+exposure drift amplifies it further. Separately, the reuse gate is whole-frame,
+so a moving foreground still re-partitions the static background.
+
+**What was tried** (this is also the fix suggested by external feedback; the
+analysis agrees with our own measurements, but the suggested "freeze the
+palette on frame 1" was NOT taken -- see step 9's earlier rollback for why a
+naive palette freeze is catastrophic on an unsettled first frame):
+
+1. **Freeze colour on reuse** (`--freeze-colour-on-reuse`, default on). When the
+   partition is reused, `render_frame` returns the previous labels AND canvas
+   and skips partition / means / palette / quantize / render entirely. An
+   unchanged scene is then byte-identical frame to frame.
+2. **Lock camera AE/WB** (`brick_io.open_camera(lock_ae, exposure, lock_wb)` and
+   `--lock-ae` / `--exposure` / `--lock-wb`). Auto-exposure is the strongest
+   source of frame-to-frame colour change, so turning it off at the camera
+   removes the drift that temporal colour stabilisation would otherwise have to
+   fight. The applied values are read back and printed, because the
+   `CAP_PROP_AUTO_EXPOSURE` convention is backend-specific (0.25/0.75 on
+   DirectShow, 0/1 elsewhere).
+
+**Why the two go together.** The earlier per-region attempt failed on quality
+because we kept re-extracting means to track the exposure drift, which let noise
+into the decision, and then added thresholds/hysteresis that introduced lag.
+Locking AE removes the drift at the source, which is what makes "reuse freezes
+the colours" safe instead of stale. This is the insight the feedback supplied
+that we had missed.
+
+**Measured (headless, 640x480, static input).**
+
+| test | without freeze | with freeze |
+|---|---|---|
+| noisy static sequence, frame-to-frame churn | 0.101% | **0.000%** |
+| noisy static sequence, colour-frozen frames | 0/14 | 13/14 |
+| app static effective FPS | 22.6 | **37.1** |
+| per-stage samples on frozen frames | all frames | **n=1** (stages skipped) |
+
+**Trade-offs / limits.**
+- Frozen colour assumes a steady exposure; a genuine scene change that stays
+  under the reuse threshold would leave the canvas stale until the signature
+  breaks reuse. The default pairs it with `--lock-ae`; disable it with
+  `--no-freeze-colour-on-reuse`.
+- The gate is still whole-frame: motion beyond the threshold re-partitions
+  everything (the per-cell dirty mask is the documented next step, not done
+  here).
+- The AE/WB lock is UNTESTED in this session (no camera); its read-back must be
+  checked on the real machine.
+
+**Files.** `frame_pipeline.py` (freeze path + config), `brick_io.open_camera`,
+`camera_app.py` (flags); `powers_of_two_upto` moved to `frame_pipeline.py` to
+keep `camera_app.py` under the 400-line limit.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
