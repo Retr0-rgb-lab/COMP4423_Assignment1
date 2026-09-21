@@ -976,6 +976,47 @@ New/changed code: `brick_means_rows.py` (new), `task4_verify_util.py` (new),
 `frame_pipeline.py` (render reuse, `--means rows` default), `brick_display.py`
 (HUD shows canvas CACHED/REDRAWN), `camera_app.py` (CLI).
 
+## Level 3, step 7: display panel -- compact HUD and aspect-preserving fit
+
+Two presentation defects reported from a real screenshot and fixed here.
+
+### Defect 1 -- the HUD covered the picture
+
+The first HUD drew 14 lines, each on its own SOLID black rectangle, occupying
+roughly the top-left 35-40% x 30-35% of the render pane. Rewritten as THREE
+lines on ONE translucent panel:
+
+    FPS 12.3 live  tris 9990/9990  K16  REUSE/cached
+    part 0 tris 0 mean 8 pale 0 quan 3 rend 0  tot 12
+    q quit  s snapshot  p pause  r reset
+
+Smaller font (0.5 -> 0.4), the per-size histogram and the config line moved to
+the exit summary where numbers belong, and the solid boxes replaced by a
+translucent panel drawn with a LOCAL `addWeighted` over the panel ROI only (no
+full-frame copy). Measured footprint after the change: ~15% width x 3-4% height,
+versus ~35-40% x ~30-35% before.
+
+### Defect 2 -- dragging the window stretched the bricks
+
+A `WINDOW_NORMAL` window stretches whatever `imshow` receives to fill it, so
+resizing to a different shape made every right-isosceles triangle
+non-isosceles. Fix: each frame, read the window's image area
+(`cv2.getWindowImageRect`), scale the composite into it with a UNIFORM factor
+and centre it (`brick_display.fit_letterbox`), then `imshow` a window-sized
+canvas -- so OpenCV's stretch becomes the identity. The HUD is drawn AFTER the
+fit, which also keeps it a constant screen size instead of growing with the
+window. Snapshots now save the clean composite (no overlay).
+
+Verification: a synthetic wide-short window (2057x379) with a 1286x506
+composite gives scale 0.749, content 963x379, aspect 2.5415 -> 2.5409 (rounding
+only), i.e. no stretch; visual inspection of the result confirms the panes are
+letterboxed/centred and the triangles read as right-isosceles.
+Evidence: `code/pics/task4/_ui_check_wide.png`.
+
+Limitation: the live window cannot be exercised headless in this session, so
+the fit is verified on a simulation plus image inspection; the actual drag
+behaviour needs the author's machine.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
