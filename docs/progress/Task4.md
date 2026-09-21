@@ -540,6 +540,248 @@ The default preset is therefore `quality` = the full 9990 bricks / K 16, with
 `balanced` (5000) and `fast` (2000) available for a machine that cannot keep up.
 The earlier `watch` preset at 1000 bricks was a pre-optimization crutch and is gone.
 
+## Level 3, step 3: whole-pipeline analysis and the A/B/C/D optimization plan
+
+(2026-09-21) Full read-through of every module on the live path, with the stage
+costs re-derived from the tables above. Conclusion: **none of the remaining
+bottlenecks is algorithmic complexity -- all of them are Python-loop x
+small-call overhead**, so the speedups can be exact (geometry untouched)
+rather than approximate. This is the plan the implementation work follows.
+
+### Pipeline as measured today (quality preset, 9990 bricks, 640x480)
+
+```mermaid
+flowchart TD
+    A["cap.read()  CAP_DSHOW 640x480  ~32 ms serial"] --> B["resize (scale=1.0: skipped)"]
+    B --> C["partition: quadtree_partition  pad + build_sats + greedy heap  ~107 ms (sat)"]
+    C --> D["triangles: leaves_to_triangles  9990 ndarrays in a Python loop  + a DUPLICATE pad_to_max  ~13 ms"]
+    D --> E["means: extract_means=fast  per-size offset gathers  ~21 ms"]
+    E --> F["palette: build_palette=kmeans_lab  cv2.kmeans per frame  ~23 ms  + palette-flicker defect"]
+    F --> G["quantize: quantize_nearest_bgr  ~4.5 ms"]
+    G --> H["render: render_triangles  9990 x (fillPoly+polylines)  ~55 ms"]
+    H --> I["compose + HUD + imshow + waitKey  NOT timed (hidden cost)"]
+```
+
+### Bottleneck table (share of the ~216 ms frame)
+
+| stage | ms | share | root cause |
+|---|---|---|---|
+| partition | ~107 | ~50% | ~4695 greedy splits, each = one 5-square SAT batch + 4 heap pushes; the cost is the numpy-call count, not arithmetic (the same lesson as the earlier "O(1) but not batched" finding) |
+| render | ~55 | ~25% | 2 cv2 calls per triangle = ~20000 Python-to-cv2 crossings |
+| means | ~21 | ~10% | sum(s^2/2) ~ 2730 small gathers (the size-32 half alone is 512 offsets) |
+| palette | ~23 | ~10% | per-frame cv2.kmeans x10 restarts; also the recorded flicker defect |
+| triangles | ~13 | 6% | Python loop + duplicate pad_to_max (partition already padded the frame) |
+| quantize | ~4.5 | 2% | already vectorised, leave alone |
+
+Hidden costs outside `StageTimer`: the ~32 ms serial camera read, and
+compose/HUD/imshow (not timed at all -- a stage must be added before any of it
+can be quoted).
+
+### The four optimizations (A/B/C/D), exact unless stated
+
+- **A -- batched render** (~55 -> ~8 ms). `labels` partitions the 9990
+  triangles into <=K colour groups; `cv2.fillPoly` paints many same-colour
+  polygons per call (<=K calls) and ONE `cv2.polylines` draws every border.
+  Cross-colour fill order differs from today, so the 1-px `fillPoly` fringe
+  may differ on shared edges; the final border pass repaints the exact
+  boundaries grey. Verify: pixel-diff count vs the current render + Delta-E /
+  PSNR unchanged.
+- **B -- precomputed split priorities** (~107 -> ~30 ms). A cell's split
+  priority depends only on image content, never on partition state -- so the
+  whole priority universe (all grid cells of sizes >= 2, ~102k candidates at
+  640x480) can be computed in ~6 batched calls, and the greedy loop becomes
+  pure Python (heapq + list lookups, zero numpy). Priority values are
+  bit-identical to the current sat path (same SAT formula, elementwise), and
+  the heap keeps the same (-p, leaf) keys, so the leaves set is bit-identical.
+  Verify: sorted-leaves equality against impl=sat.
+- **C -- palette refresh cadence** (~23 -> ~2 ms amortised, flicker -> 0).
+  Rebuild kmeans_lab every N frames (default 10), reuse it otherwise; an
+  optional scene-change trigger can force a rebuild. Between refreshes the
+  palette is byte-stable, so the recorded 207/255 drift disappears; the
+  N-frame adaptation lag is declared in the report.
+- **D -- small wastes**: vectorised `leaves_to_triangles` (~13 -> ~2 ms) with
+  the ordering contract kept; `quadtree_partition` gains an optional
+  `return_padded` kwarg so the pipeline does not pad the frame twice
+  (backwards compatible -- Task 3 callers pass nothing new).
+
+Also added for measurement honesty: `--input PATH` feeds the app from an image
+or video file, so the in-app benchmark runs headless (WSL has no camera) and
+Level 2/4 get repeatable scene inputs.
+
+Expected end state at 9990 bricks: ~70 ms/frame ~= 14 FPS, versus the recorded
+216 ms ~= 4.6 FPS, with geometry and the palette-assignment rule unchanged.
+Scope chosen by the author: A+B+C+D as one workstream in a git worktree, each
+step measured and recorded separately. Camera threading and the row-run means
+rewrite are deferred (need the real Windows machine / a second phase).
+
+## Level 3, step 3a: the analysis itself -- method, process, conclusions, actions
+
+This section records HOW the optimization work was derived, separately from the
+numbers it produced, because the method is reusable and the process includes
+wrong turns worth keeping.
+
+### Method
+
+1. **Enumerate the live path**: follow `camera_app.py`'s imports to the stage
+   sequence (partition -> triangles -> means -> palette -> quantize -> render),
+   and read every module on it end to end.
+2. **Build a cost model per stage, not just a wall time**: for each stage ask
+   "how many Python-to-C calls, and how many do the input size and triangle
+   count make?" A stage can be O(H*W) in arithmetic and still be dominated by
+   call overhead -- that was the recurring finding in this task.
+3. **Cross-check against recorded medians** from >=10-frame runs only (the
+   measurement-hygiene rule established earlier in this file; the n=2 "median"
+   error is why).
+4. **Classify each bottleneck by root cause**: algorithmic complexity vs
+   per-call overhead. Only the second class is fixable without changing output.
+5. **Decide exact vs approximate before coding**, and for an "exact" claim
+   state the invariant that makes it true (here: exact-integer sums < 2^53 make
+   summation order irrelevant, so hierarchical sums == SAT lookups bit-for-bit).
+6. **Implement behind an existing seam** (`impl=` on the partitioner, new
+   functions in the engine modules), never editing the Task 2/3 reference path.
+7. **Gate each optimization behind an assertion** (`task4_verify.py`) before
+   quoting its speed; a speedup that changes the mosaic is not a speedup.
+
+### Process (including the wrong turns)
+
+- **Precompute v1 was slower (0.56x)**: the first `_priority_maps` scored every
+  size including 1, i.e. Hp*Wp single-pixel candidates whose SSE is exactly 0.
+  Removing that dead 75% of the universe and replacing the per-size SAT batch
+  queries with an exact-integer hierarchical sum took the stage to **2.2x** and
+  kept the leaves bit-identical.
+- **`cv2.integral` evaluated and rejected**: measured 3x faster than the numpy
+  cumsum for the tables, but the cv2 5.0 Python binding returns unusable shapes
+  (a per-row list) and its squared-sum is not bit-identical. Rejected rather
+  than worked around, because the precompute no longer needs SATs at all.
+- **Palette cache off-by-one**: the first `PaletteState` rebuilt every
+  `refresh + 1` frames, because `age` only advanced on cached frames. Caught by
+  the cadence assertion (rebuilds at 0, 6, 12 instead of 0, 5, 10), fixed by
+  counting the rebuild frame and exposing an explicit `refreshed` flag.
+- **End-to-end 69% pixel diff, explained not patched**: the first old-vs-new
+  whole-frame comparison differed on 69% of pixels. Root cause was the
+  ALREADY-RECORDED K-Means non-reproducibility (a global-RNG draw advances
+  between the two calls), not the optimizations. Seeding the RNG before each
+  path in the check dropped it to **0 pixels**.
+- **The render batching was byte-identical, better than predicted**: the plan
+  expected the 1-px `fillPoly` fringe on shared edges to differ. Measured 0
+  differing pixels on both a synthetic frame and a real photo, because triangle
+  interiors are disjoint and the single border pass repaints every boundary.
+
+### Conclusions
+
+- All four remaining bottlenecks were **per-call overhead, not algorithmic
+  complexity** (see the bottleneck table above): ~4700 tiny numpy calls in the
+  partition loop, ~20000 cv2 calls in the render, ~2730 gathers in the means,
+  and a per-frame K-Means.
+- **The speedups could therefore be exact**, and were proven so: precomp
+  partition leaves == sat leaves (bit-identical), vectorised triangles ==
+  per-triangle loop (vertex-exact), batched render == reference render
+  (0 pixels), and the whole optimized frame == the old frame (0 pixels) on
+  identical inputs.
+- The palette cost was removed **and** the recorded frame-to-frame flicker
+  disappeared as a side effect of the same change (a byte-stable palette
+  between rebuilds).
+- Measured end state at the quality preset (9990 bricks, 640x480, paired
+  in-process): **129 -> 59.5 ms per frame, 2.17x, ~16.8 FPS processing-only**;
+  app-level benchmark 130.5 -> 62.0 ms. The original full-resolution baseline
+  was 0.45 FPS (216 ms + camera read), so the road is 0.45 -> ~4.6 (earlier
+  work, recorded above) -> ~16.8 FPS processing-only.
+
+### Actions (code)
+
+| Optimization | File / function |
+|---|---|
+| B -- precomputed split priorities | `code/brick_prio.py` (`priority_maps`, `prio_from_maps`); wired as `impl="precomp"` in `code/brick_quadtree.py` |
+| D1 -- vectorised triangles | `code/brick_geom.py` (`leaves_to_triangles_array`) |
+| D1 -- no double padding | `code/brick_quadtree.py` (`return_padded=True`) |
+| A -- batched render | `code/brick_render.py` (`render_triangles_batched`) |
+| C -- palette refresh cache | `code/frame_pipeline.py` (`PaletteState`) |
+| driver split + headless input | `code/frame_pipeline.py` (new), `code/camera_app.py` (slimmed, `--input`, `--palette-refresh`, `--sse precomp`) |
+| correctness + benchmark gate | `code/task4_verify.py` |
+
+## Level 3, step 4: A/B/C/D implemented and measured
+
+All four optimizations landed on branch `task4/realtime-opt` (worktree
+`../Assignment1-task4-opt`), each behind the existing engine-module seams so
+the Task 2/3 paths stay behaviour-identical:
+
+| Opt | Where | What |
+|---|---|---|
+| B | `code/brick_prio.py` (new), `brick_quadtree.py` (`impl="precomp"`) | split-priority universe scored up front via exact-integer hierarchical sums; greedy loop runs on Python lists, zero numpy per split |
+| A | `code/brick_render.py` `render_triangles_batched` | <=K `fillPoly` calls (one per palette label) + ONE `polylines` for all borders |
+| C | `code/frame_pipeline.py` `PaletteState` | K-Means palette rebuilt every N frames (default 10), byte-stable between rebuilds |
+| D | `code/brick_geom.py` `leaves_to_triangles_array`; `quadtree_partition(return_padded=True)` | vectorised (T,3,2) triangle build; the padded image is carried from partition to means instead of being recomputed |
+| — | `code/frame_pipeline.py` (new), `camera_app.py` (slimmed) | per-frame engine moved out of the driver; `--input PATH` feeds the app from a file so the in-app benchmark runs headless |
+| — | `code/task4_verify.py` (new) | assertion + paired-benchmark gate for all of the above |
+
+### Correctness (task4_verify.py, synthetic 640x480, all asserted)
+
+1. precomp partition leaves == sat leaves, sorted (bit-identical, 4995 cells).
+2. `leaves_to_triangles_array` == `leaves_to_triangles`, vertex-exact.
+3. batched render vs reference render: **0 differing pixels** on the tested
+   frames (even the 1-px fringe is unchanged because interiors are disjoint
+   and the single border pass repaints every boundary); Delta-E/PSNR vs
+   source identical to the reference render.
+4. palette cache: rebuilds exactly on frames 0, N, 2N, ...; byte-identical
+   palette between rebuilds (zero drift).
+5. whole-frame old path (sat + refresh=1) vs new path (precomp + refresh=10)
+   on the SAME frame with the RNG re-seeded per path: **0 differing pixels**.
+
+The end-to-end output of the optimized pipeline is byte-identical to the old
+pipeline on identical inputs (given the same K-Means draw). Two design facts
+make B exact: a cell's priority never depends on partition state, and all
+sums are exact integers < 2^53, so ANY summation order (hierarchical here,
+SAT lookups there) produces bit-identical SSE operands.
+
+### Paired benchmarks (reps=5, in-process, best-of; synthetic 640x480)
+
+| stage | old | new | speedup |
+|---|---|---|---|
+| partition | 72.3 ms | 33.8 ms | 2.14x |
+| triangles | 8.3 ms | 2.2 ms | 3.79x |
+| render | 28.1 ms | 8.4 ms | 3.35x |
+| palette (amortised /5) | 22.0 ms | 4.9 ms | 4.47x |
+| **whole frame** | **129.0 ms** | **59.5 ms** | **2.17x (~16.8 FPS processing-only)** |
+
+### App-level before/after (camera_app --no-show --max-frames 30 --input, 9990 bricks)
+
+Same machine, same input, alternating configs; input = sky.jpg downscaled to
+640x480 (`code/pics/task4/_bench640.jpg`):
+
+| stage | old (sat, refresh=1) | new (precomp, refresh=10) |
+|---|---|---|
+| partition | 75.1 | 33.0 |
+| triangles | 2.6 | 2.7 |
+| means | 14.2 | 13.8 |
+| palette | 25.0 | 0.0 (median; 3 rebuilds in 30 frames) |
+| quantize | 3.7 | 3.2 |
+| render | 10.0 | 9.4 |
+| **TOTAL** | **130.5** | **62.0** |
+
+Quality on the saved first frame (old vs new renders, both vs source):
+Delta-E2000 11.014 == 11.014, PSNR 15.68 == 15.68, **0 pixels differ**.
+Evidence: `code/pics/task4/old_base/frame0001_{input,render}.png` and
+`code/pics/task4/new_opt/...`.
+
+Full-resolution sky.jpg (1706x1279) in the same harness: TOTAL 411 ms -> 291
+ms (partition 320 -> 231). The speedup shrinks with image area because the
+fixed per-split saving stays constant while the map precompute grows.
+
+### Caveats / deferred
+
+- Absolute numbers here came from the Windows venv running under WSL interop;
+  quote RATIOS for the report (paired, in-process) and re-measure absolute FPS
+  on the real machine before quoting it.
+- Camera read (~32 ms) is still serial; the threaded-capture change is
+  deferred to the real-machine phase as agreed.
+- The means stage (~14-21 ms) is untouched; the row-run table rewrite remains
+  a documented phase-2 option.
+- `--palette-refresh N` introduces up to N frames of palette adaptation lag;
+  N=10 is the default and must be declared when quoted.
+- `cv2.integral` was evaluated and rejected for `build_sats`: the cv2 5.0
+  binding returns unusable shapes (per-row list) here, and the numpy cumsum
+  variants (axis swap, stacked) are bit-identical but no faster.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
