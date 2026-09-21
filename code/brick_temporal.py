@@ -75,6 +75,13 @@ class TemporalState:
         self.prev_labels = None
         self.age = 0
         self.reused = False
+        # Render cache: the last canvas plus the EXACT inputs that drew it.
+        # Reused only when labels AND palette are byte-identical (see
+        # reuse_render), so it can never show a stale mosaic.
+        self.render_labels = None
+        self.render_palette = None
+        self.canvas = None
+        self.render_hits = 0
 
     @staticmethod
     def signature(frame):
@@ -118,7 +125,9 @@ class TemporalState:
         """Record a freshly computed partition and invalidate the label memory.
 
         `prev_labels` is cleared because triangle rows now describe new cells;
-        keeping stale labels would apply hysteresis to the wrong triangles.
+        keeping stale labels would apply hysteresis to the wrong triangles. The
+        render cache is cleared for the same reason: the cached canvas belongs
+        to the old triangle set.
         """
         self.leaves = leaves
         self.padded_shape = padded_shape
@@ -126,6 +135,9 @@ class TemporalState:
         self.tri = tri
         self.sig = self.signature(frame)
         self.prev_labels = None
+        self.render_labels = None
+        self.render_palette = None
+        self.canvas = None
         self.age = 0
         self.reused = False
 
@@ -133,3 +145,45 @@ class TemporalState:
         """Mark that this frame reused the cached partition (advances `age`)."""
         self.age += 1
         self.reused = True
+
+    def reuse_render(self, labels, palette, geometry_reused):
+        """Return the cached canvas iff this frame's drawing inputs are identical.
+
+        Function
+        --------
+        The canvas is a pure function of (tri, labels, palette, shapes). With
+        geometry reused, `tri` and the shapes are already fixed, so if `labels`
+        and `palette` are byte-identical to the frame that drew the cached
+        canvas, the canvas IS that same image and re-rasterising it would waste
+        ~10 ms. Requiring BOTH arrays to match is what makes the reuse exact
+        rather than approximate.
+
+        Shape/semantics: `labels` is (T,) uint8, `palette` (K,3) uint8 BGR;
+        returns the cached (oH,oW,3) uint8 canvas or None meaning "redraw".
+        Returns None unless temporal coherence is on, the geometry was reused
+        this frame, a canvas is cached, and both arrays match exactly. Side
+        effect: bumps `render_hits` on a hit, for the HUD/measurement.
+        """
+        if not (self.enabled and geometry_reused and self.canvas is not None):
+            return None
+        if self.render_labels is None or self.render_labels.shape != labels.shape:
+            return None
+        if not np.array_equal(labels, self.render_labels):
+            return None
+        if not np.array_equal(palette, self.render_palette):
+            return None
+        self.render_hits += 1
+        return self.canvas
+
+    def remember_render(self, labels, palette, canvas):
+        """Cache the canvas together with the exact inputs that produced it.
+
+        Shape/semantics: `labels` (T,) uint8, `palette` (K,3) uint8 BGR,
+        `canvas` (oH,oW,3) uint8. No-op when disabled. References are stored,
+        not copies, because the caller never mutates `labels`/`palette`/`canvas`
+        after this point (quantize allocates fresh arrays each frame).
+        """
+        if self.enabled:
+            self.render_labels = labels
+            self.render_palette = palette
+            self.canvas = canvas

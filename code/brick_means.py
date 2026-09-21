@@ -71,8 +71,9 @@ neighbour's colour and raises nothing, so `compare_means` below asserts it.
 import numpy as np
 
 # Methods accepted by `extract_means`. Kept in one place so the CLI choices and
-# the dispatcher cannot drift apart.
-METHODS = ("mask", "fast", "sample")
+# the dispatcher cannot drift apart. "rows" is the row-run table implementation
+# in `brick_means_rows` (bit-identical to "fast", fewer numpy calls).
+METHODS = ("mask", "fast", "sample", "rows")
 
 
 def cell_groups(leaves):
@@ -270,6 +271,11 @@ def extract_means(img, leaves, method="mask", n_samples=9):
         return means_by_masks(img, leaves)
     if method == "sample":
         return means_by_sampling(img, leaves, n_samples)
+    if method == "rows":
+        # Row-run prefix sums; bit-identical to "fast" by exact-integer sums
+        # (see brick_means_rows). Imported lazily to avoid a circular import.
+        from brick_means_rows import means_by_rows
+        return means_by_rows(img, leaves)
     if method == "mask":
         from brick_geom import leaves_to_triangles
         from brick_render import triangle_means_bgr

@@ -205,6 +205,9 @@ def render_frame(frame, cfg, timer, palette_state, temporal_state=None):
          static, the cached partition and triangle array are reused and the
          sticky quantizer applies a label dead-band. With temporal_state=None
          the function is exactly the step-4 pipeline (used by the gates).
+      E  render reuse -- when the reused partition's labels AND palette are
+         byte-identical to the previous frame, the previous canvas is returned
+         instead of re-rasterising (the canvas is a pure function of them).
 
     Shapes
     ------
@@ -271,15 +274,29 @@ def render_frame(frame, cfg, timer, palette_state, temporal_state=None):
         else:
             labels = quantize_nearest_bgr(means, palette)
 
-    with timer.stage("render"):
-        canvas = render_triangles_batched(padded_shape, tri, labels, palette,
-                                          orig_shape)
-
+    # State bookkeeping happens BEFORE the render cache is (re)filled: commit()
+    # clears the render cache when the partition changed, and note_reuse() ages
+    # a reused one. The render stage then re-caches the canvas it just drew.
     if temporal_on:
         if reuse:
             temporal_state.note_reuse()
         else:
             temporal_state.commit(leaves, padded_shape, orig_shape, tri, frame)
+
+    with timer.stage("render"):
+        render_reused = False
+        # Render reuse (opt E): the canvas is a pure function of
+        # (tri, labels, palette, shapes); with geometry reused and labels AND
+        # palette byte-identical, the cached canvas is the same image.
+        canvas = (temporal_state.reuse_render(labels, palette, reuse)
+                  if temporal_on else None)
+        if canvas is None:
+            canvas = render_triangles_batched(padded_shape, tri, labels,
+                                              palette, orig_shape)
+            if temporal_on:
+                temporal_state.remember_render(labels, palette, canvas)
+        else:
+            render_reused = True
 
     sizes = {}
     for (_, _, s) in leaves:
@@ -291,6 +308,7 @@ def render_frame(frame, cfg, timer, palette_state, temporal_state=None):
         "palette": palette,
         "palette_refreshed": refreshed,
         "reused": reuse,
+        "render_reused": render_reused,
         "t_resize_ms": t_resize,
     }
     return canvas, processed, info

@@ -165,8 +165,10 @@ def main():
     p.add_argument("--smax", type=int, default=32, help="largest brick side")
     p.add_argument("--smin", type=int, default=1, help="smallest brick side")
     p.add_argument("--k", type=int, default=pre["k"], help="palette size (>3)")
-    p.add_argument("--means", choices=list(MEANS_METHODS), default="fast",
-                   help="per-triangle colour method; 'mask' is the slow shipped")
+    p.add_argument("--means", choices=list(MEANS_METHODS), default="rows",
+                   help="per-triangle colour method; 'rows' (default) is the "
+                        "row-run table, bit-identical to 'fast' and faster; "
+                        "'mask' is the slow shipped reference")
     p.add_argument("--sse", dest="sse_impl",
                    choices=["precomp", "sat", "ref"], default="precomp",
                    help="quadtree split-priority implementation; 'precomp' "

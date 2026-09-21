@@ -123,6 +123,7 @@ def draw_hud(canvas, fps, info, cfg, paused, timer, x0=0):
         f"{cfg.partition} S_max={max(cfg.S_set)} K={cfg.K} "
         f"{cfg.palette_method}",
         f"{'REUSE (static scene)' if info.get('reused') else 'PARTITION'} "
+        f"{'canvas CACHED' if info.get('render_reused') else 'canvas REDRAWN'} "
         f"{'palette FRESH' if info.get('palette_refreshed') else ''}",
         "sizes " + " ".join(f"{s}:{n}" for s, n in sorted(info["sizes"].items())),
         "--- median ms per stage ---",

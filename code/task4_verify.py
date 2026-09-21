@@ -38,7 +38,6 @@ Usage (Windows venv, from the repo root):
 import argparse
 import os
 import sys
-import time
 
 import numpy as np
 
@@ -52,66 +51,13 @@ from brick_color import build_palette, quantize_nearest_bgr  # noqa: E402
 from brick_color_rt import palette_kmeans_warm  # noqa: E402
 from brick_temporal import TemporalState  # noqa: E402
 from brick_render import (render_triangles, render_triangles_batched)  # noqa: E402
-from brick_means import extract_means  # noqa: E402
+from brick_means import extract_means, means_by_masks  # noqa: E402
+from brick_means_rows import means_by_rows, compare_with_masks  # noqa: E402
 from brick_io import StageTimer  # noqa: E402
 from frame_pipeline import FrameConfig, PaletteState, render_frame  # noqa: E402
-from brick_metrics import delta_e_2000_full  # noqa: E402
-from skimage.metrics import peak_signal_noise_ratio  # noqa: E402
+from task4_verify_util import (synthetic_frame, quality_pair, best_of,
+                                 churn)  # noqa: E402
 
-
-def synthetic_frame(t, h=480, w=640, seed=7):
-    """One synthetic 640x480 camera-like frame at time step t.
-
-    Function: deterministic moving content (diagonal gradient + a drifting
-    disc + a fixed high-contrast block + light noise) so the partition, the
-    K-Means palette and the quantizer all see real variation frame to frame,
-    while identical t always yields the identical image (flicker test needs
-    that). Replaces the camera for headless verification.
-
-    Shapes: returns (h, w, 3) uint8 BGR. Semantics: `t` shifts the disc centre
-    along x; `seed` fixes the noise so all runs see the same "scene".
-    """
-    rng = np.random.default_rng(seed)
-    yy, xx = np.mgrid[0:h, 0:w]
-    base = np.empty((h, w, 3), dtype=np.float32)
-    base[..., 0] = 200 - 0.3 * xx + 0.1 * t          # B: falls left->right
-    base[..., 1] = 60 + 0.4 * yy                     # G: rises top->bottom
-    base[..., 2] = 40 + 0.25 * xx                    # R
-    cx, cy, r = 100 + (t * 9) % (w - 200), h // 2, 90
-    disc = (xx - cx) ** 2 + (yy - cy) ** 2 < r * r
-    base[disc] = (40, 200, 220)                      # warm disc, BGR
-    base[h // 5:h // 5 + 80, w // 5:w // 5 + 120] = (20, 20, 230)  # red block
-    noise = rng.normal(0, 4, (h, w, 3))
-    return np.clip(base + noise, 0, 255).astype(np.uint8)
-
-
-def quality_pair(src, canvas):
-    """(mean Delta-E2000, PSNR dB) of a render against its source frame.
-
-    Shape: both inputs (H, W, 3) uint8 BGR; two floats out. This is the same
-    metric pair Task 4 uses for its before/after quality column, so the
-    numbers quoted here drop straight into that table.
-    """
-    de, _ = delta_e_2000_full(src, canvas)
-    psnr = float(peak_signal_noise_ratio(src, canvas, data_range=255))
-    return de, psnr
-
-
-def best_of(fn, reps):
-    """Median-of-reps wall time in ms for a zero-arg callable (paired timing).
-
-    Semantics: returns (best_ms, median_ms). Best is the headline for stage
-    benchmarks (matches the Task 4 convention of quoting best-of-N for paired
-    in-process runs); median is printed alongside so a bimodal cost cannot
-    hide.
-    """
-    ts = []
-    for _ in range(reps):
-        t0 = time.perf_counter()
-        fn()
-        ts.append((time.perf_counter() - t0) * 1000.0)
-    ts.sort()
-    return ts[0], ts[len(ts) // 2]
 
 
 def check_partition_equivalence(frame, budget, reps):
@@ -265,19 +211,24 @@ def check_end_to_end(frame, cfg, reps):
     return t_b, t_o
 
 
-def _churn(a, b, thresh=8):
-    """Fraction of pixels whose largest channel change exceeds `thresh`.
+def check_means_rows(frame, leaves, reps):
+    """Row-run means (opt E) must be bit-identical to the offset-gather method.
 
-    Function: frame-to-frame difference that ignores sub-perceptual changes.
-    Needed because a warm-started palette still moves 1-2/255 at a rebuild
-    frame, which flips "any pixel differs" on most of the frame while being
-    invisible; a threshold of 8 grey levels measures what a viewer sees.
+    Function: asserts `means_by_rows == means_by_masks` exactly (the claim is
+    bit-identity, proved by exact-integer sums), then times both.
 
-    Shape/semantics: two (H,W,3) uint8 BGR frames in; one float in [0,1] out,
-    the share of pixels with max-channel |delta| > `thresh`.
+    Shape/semantics: `frame` (H,W,3) uint8 BGR, `leaves` a partition; prints and
+    asserts; returns the two (best_ms, median_ms) timing pairs.
     """
-    d = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2)
-    return float((d > thresh).mean())
+    padded, _, _ = pad_to_max(frame, 32)
+    res = compare_with_masks(padded, leaves)
+    print(f"  [E] means rows vs masks: identical={res['identical']} "
+          f"max|diff|={res['max_absdiff']:.3g} n_diff={res['n_diff']}")
+    assert res["identical"], "row-run means are NOT bit-identical to masks"
+    t_mask = best_of(lambda: means_by_masks(padded, leaves), reps)
+    t_rows = best_of(lambda: means_by_rows(padded, leaves), reps)
+    print(f"  [E] means stage  masks {t_mask[0]:7.1f} ms | rows {t_rows[0]:7.1f} ms "
+          f"| speedup {t_mask[0]/t_rows[0]:.2f}x")
 
 
 def check_temporal(identical, noisy, cfg, reps):
@@ -322,21 +273,22 @@ def check_temporal(identical, noisy, cfg, reps):
             if info["reused"]:
                 reused += 1
             if prev is not None:
-                c = _churn(canvas, prev)
+                c = churn(canvas, prev)
                 (flash if info["palette_refreshed"] else steady).append(c)
             prev, prev_pal = canvas, info["palette"]
-        return steady, flash, reused
+        return steady, flash, reused, tstate.render_hits
 
     rows = {}
     for name, seq in (("identical", identical), ("noisy", noisy)):
         for temporal_on in (False, True):
-            steady, flash, re = run_sequence(seq, temporal_on)
-            rows[(name, temporal_on)] = (steady, flash, re)
+            steady, flash, re, rh = run_sequence(seq, temporal_on)
+            rows[(name, temporal_on)] = (steady, flash, re, rh)
             print(f"  [B/C] {name:9s} temporal={'ON ' if temporal_on else 'OFF'} "
                   f"| steady churn {np.mean(steady)*100:6.3f}% "
                   f"| rebuild-frame churn "
                   f"{(max(flash) if flash else 0.0)*100:6.3f}% "
-                  f"| reused {re}/{len(seq)}")
+                  f"| reused {re}/{len(seq)} "
+                  f"| canvas cached {rh}/{len(seq)}")
 
     # Assertions: temporal ON must freeze a static scene and cut the churn.
     # The rebuild-frame bound is 0.1%, not 0: a warm-started entry can still
@@ -347,6 +299,7 @@ def check_temporal(identical, noisy, cfg, reps):
     assert (max(id_on[1]) if id_on[1] else 0.0) < 0.001, \
         "warm-started rebuild still visibly churns identical frames"
     assert id_on[2] == len(identical) - 1, "static frames were not all reused"
+    assert id_on[3] > 0, "render reuse (opt E) never fired on a static scene"
     noisy_off, noisy_on = rows[("noisy", False)], rows[("noisy", True)]
     assert np.mean(noisy_on[0]) < np.mean(noisy_off[0]), \
         "temporal coherence did not reduce per-frame churn"
@@ -376,6 +329,9 @@ def main():
     check_triangles(leaves, reps)
     check_render(frame, leaves, reps)
     check_palette_cache(frame, leaves, reps)
+
+    print("\n-- means row-run table (opt E) --")
+    check_means_rows(frame, leaves, reps)
 
     print("\n-- end-to-end frame --")
     check_end_to_end(frame, cfg, reps)
