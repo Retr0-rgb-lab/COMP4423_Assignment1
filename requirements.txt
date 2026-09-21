@@ -1,0 +1,9 @@
+# COMP4423 Assignment 1 -- pinned dependencies.
+# Verified on Windows, Python 3.12 (the venv lives OUTSIDE the repo; see AGENTS
+# section 9: from this directory it is ../../venv).
+numpy==2.4.3
+opencv-python==5.0.0.93
+opencv-contrib-python==5.0.0.93
+scikit-image==0.26.0
+matplotlib==3.10.8
+scipy==1.17.1
