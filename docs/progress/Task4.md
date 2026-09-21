@@ -915,6 +915,67 @@ stops updating cell boundaries on a still scene -- and its defaults
 validation against a real camera's noise and exposure behaviour (no camera in
 this session).
 
+## Level 3, step 6: render reuse and row-run means (opt E)
+
+The temporal workstream (step 5) left two per-frame costs on a static scene:
+`means` (~14 ms) and `render` (~10 ms). The same principle -- "do not recompute
+what did not change" -- extends to both, and both are exact.
+
+### E1 -- row-run means (`brick_means_rows.py`)
+
+`means_by_masks` ("fast") walks every pixel of each half-mask as an OFFSET and
+issues one vectorised gather per offset: ~sum(s^2/2) ~ 2730 tiny numpy calls per
+640x480 frame. Inside a cell, however, each triangle half is a CONTIGUOUS run of
+pixels on every row, so a per-row prefix-sum table answers one row's run in two
+lookups and the call count drops to ~sum(2s) (a few hundred). Added as
+`means="rows"` and made the app default.
+
+Bit-identity is provable, not hoped for: every triangle's pixel sum is an exact
+integer (at most 255 * (32*33/2) = 134640 < 2^24, so float32 holds it exactly),
+and exact integer addition is associative, so the summation order cannot change
+the value. `task4_verify.compare_with_masks` asserts it:
+
+| | masks | rows |
+|---|---|---|
+| result | (T,3) float32 | **bit-identical** (`max|diff|=0`, `n_diff=0`) |
+| stage ms | 14.2 | **7.7** (1.85x) |
+
+### E2 -- render reuse (`TemporalState.reuse_render`)
+
+The canvas is a pure function of `(tri, labels, palette, shapes)`. With the
+geometry reused (opt B), `tri` and the shapes are fixed, so if `labels` AND
+`palette` are byte-identical to the frame that drew the cached canvas, the
+canvas IS that same image and re-rasterising it is pure waste. `render_frame`
+returns the cached canvas in that case; otherwise it redraws and re-caches.
+Both arrays must match exactly, so this can never show a stale mosaic.
+
+On a static scene (identical frames) the canvas was cached on 13/14 frames
+(render 10 -> 0 ms). Under sigma=2 noise it did NOT fire (0/14): the labels do
+change, so a redraw is genuinely required -- the reuse is opportunistic, not an
+approximation.
+
+### Measured (stacked, app-level, static input, 9990 bricks 640x480)
+
+| configuration | TOTAL ms | notes |
+|---|---|---|
+| no temporal (pre-step-5 pipeline) | 68.9 | partition 37.7, means 14.3, render 10.3 |
+| + temporal coherence (A+B+C) | 27.5 | partition 0.2 (reused) |
+| **+ opt E (rows means + render reuse)** | **11.4** | means 8.0, render 0.0 (cached) |
+
+So a static scene went 68.9 -> 11.4 ms, ~6x, entirely through exact
+reuse/algorithm changes -- no quality cost. Correctness is unchanged: with
+temporal coherence OFF the step-4 gates still pass and the whole frame is still
+0 differing pixels from the old path; `means="rows"` is asserted bit-identical
+to `means="fast"`.
+
+Housekeeping: `task4_verify.py` crossed the 400-line limit, so the generic test
+utilities (`task4_verify_util.py`) were split out -- 350 + 86 lines.
+
+New/changed code: `brick_means_rows.py` (new), `task4_verify_util.py` (new),
+`brick_means.py` (adds the "rows" method), `brick_temporal.py` (render cache),
+`frame_pipeline.py` (render reuse, `--means rows` default), `brick_display.py`
+(HUD shows canvas CACHED/REDRAWN), `camera_app.py` (CLI).
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
