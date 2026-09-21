@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+# Extracted reference material (sample report); keep out of git (AGENTS 2).
+docs/progress/sample_report/

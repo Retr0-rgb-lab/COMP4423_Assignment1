@@ -2,37 +2,21 @@
 
 ## Status snapshot
 
+Updated 2026-09-21. This block previously quoted stale figures that contradicted
+the body below (the handoff flagged it); it now points at the sections that hold
+the evidence instead of repeating numbers.
+
 | Level | Marks | State |
 |---|---|---|
-| 1 — camera capture + display | 10 | **done**. `camera_app.py` opens the real camera (640×480, CAP_DSHOW), renders the full Task 3 pipeline per frame, and shows the source and the render side by side in a resizable window that closes on its X. Verified: camera opens, 8–30 frame headless runs complete, Task 2 re-run reproduces byte-identical PNGs. |
-| 2 — different content | 15 | **not started**. Needs several physical scenes; a `--snapshot-dir` + `s` capture path exists, no named-scene flow yet. |
-| 3 — real-time (chosen option) | 20 | **in progress**. Mean-colour stage done (`brick_means.py`); it also uncovered a real defect in the shipped pipeline. `quadtree_partition` is now the bottleneck at ~82% of the frame. |
-| 4 — before/after comparison | 25 | **not started**, but every change so far is being measured in the form it needs: same frame, 5-frame runs, FPS plus ΔE2000/PSNR against the source. |
+| 1 -- camera capture + display | 10 | **done**. `camera_app.py` opens the real camera (640x480, CAP_DSHOW), runs the pipeline per frame and shows input + render side by side in a resizable window (compact HUD, aspect-preserving fit). Author-verified on the real machine. |
+| 2 -- different content | 15 | **not started** (blocker: needs several physical scenes; a `--snapshot-dir` + `s` capture path exists). |
+| 3 -- real-time (chosen option) | 20 | **done**. The pipeline was split and optimised stage by stage; see steps 3-8. The full-quality config is no longer 0.45 FPS: static benchmark ~37 FPS effective, ~15-17 FPS processing-only on a moving scene. |
+| 4 -- before/after comparison | 25 | **material exists throughout**: every change since step 3 is measured as a paired before/after (FPS + dE2000/PSNR + pixel diffs). |
 
-Measured so far (640×480, 9990 triangles, same camera frame, through the app's own
-benchmark mode):
-
-| Stage / change | Frame FPS | Stage ms | ΔE2000 vs source |
-|---|---|---|---|
-| baseline (`--means mask`) | 0.41 | means 1716 | 9.947 |
-| + corrected means (`--means fast`) | 1.35 | means 21 | **8.633** |
-| + sampled means (`--means sample`) | 1.47 | means 5 | 10.244 |
-
-Refinement ladder available today, full resolution: 2000 bricks → 3.22 FPS,
-5000 → 2.01 FPS, 9990 → 1.38 FPS.
-
-Two things are deliberately left UNFIXED because they are Level 4 material —
-each is a measured problem with a known fix, which is exactly what the level
-asks for:
-1. the per-frame K-Means palette is re-seeded only once at startup, so the palette
-   changes every frame even for a static scene (measured: per-channel drift up to
-   207/255 across 5 calls on identical input; re-seeding per call makes all 5
-   identical);
-2. the `quadtree_partition` cost, addressed next.
-
-Also still open and NOT to be reported as verified: no second machine, one camera,
-and the display has never been inspected by eye in this session (it cannot show
-images), so all render checks are numeric.
+Where the numbers live: steps 3-8 for the per-stage and end-to-end tables,
+`code/task4_verify.py` for the repeatable headless harness, and "Known
+limitations" for the honest caveats (single machine, one camera, Level 2 not
+captured, per-cell foreground isolation not implemented).
 
 ## Goal (from assignment PDF)
 
@@ -1082,6 +1066,118 @@ in this session: the headless numbers above (0.000% static churn) and the
 author's visual verdict agree, so this attempt is accepted. It is merged into
 `main`; the per-cell dirty mask and the quantitative flicker metric are left as
 the next step.
+
+## Prompt drafts (GenAI) -- reconstructed
+
+> Drafted from the recorded work in this file (the measured tables + commit
+> messages) to answer the report's Q4/Q5 ("how did you use GenAI" / "how does
+> GenAI understand the tasks"). These are RECONSTRUCTED DRAFTS, not a verbatim
+> transcript -- the author should confirm or adjust the wording before quoting.
+> Every AI-output line points at a measurement recorded elsewhere in this file,
+> so nothing here is invented. The limitations section (Q6) is the author's to
+> write (AGENTS 7/8).
+
+### P1 -- bottleneck analysis: where does the 216 ms go?
+
+- **v1**: "The live pipeline at 640x480 / 9990 bricks runs at ~0.45 FPS. Read
+  the code and, per stage, say whether the cost is algorithmic complexity or a
+  Python/numpy CALL-COUNT problem. Give a cost model, not just a profile."
+- **AI output**: named `triangle_means_bgr` (O(T*H*W), 75% of the frame) and
+  `quadtree_partition` as the top two; the unifying diagnosis was "per-call
+  overhead, not complexity" (see the bottleneck table in step 3).
+- **v2**: "For each proposed fix, is the result EXACT or approximate? If exact,
+  state the invariant that makes it exact."
+- **Outcome**: step 3 / step 3a. This framing is what made the rest of the work
+  exact-by-construction rather than approximate.
+
+### P2 -- optimization A: batched rendering
+
+- **v1**: "`render_triangles` calls cv2.fillPoly + polylines once per triangle
+  (~20000 calls). Can it be O(K) calls with the same output -- group
+  same-colour polygons and draw all borders in one call?"
+- **AI output**: <=K fillPoly (grouped by palette label) + one polylines;
+  predicted the 1-px `fillPoly` fringe would differ.
+- **Measured**: 55 -> 8.4 ms (3.25x) and **0 differing pixels** -- byte-identical,
+  better than the AI predicted (step 4).
+
+### P3 -- optimization B: precompute split priorities (must stay exact)
+
+- **v1**: "The quadtree issues a small numpy batch per split (~4700/frame). A
+  cell's delta-SSE/6 depends only on the image, not the partition, so can we
+  score the whole candidate universe up front and make the greedy loop pure
+  Python -- while producing the IDENTICAL leaves?"
+- **AI output / wrong turn**: the first version was SLOWER (0.56x) because it
+  also mapped size-1 cells (all exactly zero); the fix was an exact-integer
+  hierarchical sum over sizes >= 2.
+- **v2**: "Prove why the batched SAT sums and the hierarchical sums are
+  bit-identical, and add an assertion that proves it at runtime."
+- **Measured**: 2.16x on the stage, leaves bit-identical (4995 cells) -- step 3a
+  process log, step 4.
+
+### P4 -- optimizations C / D / E
+
+- **palette**: "The palette is rebuilt every frame with cv2.kmeans (~23 ms) and
+  it drifts. Cache it and warm-start rebuilds so it refines instead of jumping."
+- **triangles**: "`leaves_to_triangles` builds 9990 small ndarrays per frame;
+  vectorise it into one (T,3,2) array, and stop padding the frame twice."
+- **render reuse**: "When the geometry is reused and labels+palette are
+  byte-identical, the canvas is a pure function of them -- skip rasterising."
+- **measured**: step 4 (triangles 3.8x, palette 4.3x amortised) and step 6
+  (row-run means bit-identical 1.85x; render reuse 0 ms on a static scene).
+
+### P5 -- jitter root cause (the hard one)
+
+- **v1**: "With the camera held still the mosaic still flickers every frame,
+  plus a periodic flash. Measure where the frame-to-frame change comes from and
+  separate palette instability from geometry/colour noise."
+- **AI output**: two independent causes -- (i) K-Means local-optimum instability
+  (180/255 from OpenCV's global RNG; 144/255 even with a fixed seed under
+  sigma=2 noise); (ii) whole-frame recompute. Evidence tables in step 5.
+- **v2**: "Warm-start the k-means from the previous palette and dead-band tiny
+  moves; then gate a whole-frame reuse on a scene signature."
+- **Measured**: palette rebuild delta 153 -> 1; noisy churn 2.40 -> 0.06%
+  (step 5).
+
+### P6 -- the per-region attempt and its rollback (a problem, not a win)
+
+- **v1**: "A moving foreground makes the untouched background re-partition too.
+  Can we isolate per region: freeze the geometry and let each cell change only
+  when its OWN colour moved?"
+- **AI output**: implemented (frozen partition + palette freeze + per-cell
+  colour stabilisation + label debounce). It removed the jitter, but the render
+  quality visibly dropped.
+- **v2**: "The quality clearly regressed. Find out WHY with an ablation, not an
+  opinion."
+- **AI output**: the PALETTE freeze (not the geometry freeze) was the cause, and
+  it was catastrophic when the first frame is unrepresentative (PSNR 13.9 ->
+  9.9 dB on a dark first frame); freezing the geometry alone was nearly free.
+- **Outcome**: rolled back. The lesson -- lock AE at the source, then freeze
+  colour on reuse -- became step 8.
+
+### P7 -- reuse-freezes-colour + camera AE/WB lock (accepted)
+
+- **v1**: "Even when the partition is reused, means are re-extracted every
+  frame, so a static scene still shows residual colour churn. If the partition
+  is reused, can we keep the previous labels/canvas too? What has to be true for
+  that to be safe?"
+- **AI output**: freeze the colour on reuse; but that is only safe if the
+  exposure is steady, so also lock camera AE/WB; and a genuine change must break
+  the reuse (the signature gate already does).
+- **Measured**: static churn 0.101 -> 0.000%; effective FPS 22.6 -> 37.1;
+  author confirmed on the real camera (step 8).
+- **Outcome**: merged into `main`.
+
+### P8 -- the border attempt (rejected by the author)
+
+- **v1**: "In dense small-brick areas the uniform 1-px black border covers the
+  detail; a 1-4 px brick is almost all border. Propose options and render them
+  for comparison."
+- **AI output**: six variants (anti-alias / skip small bricks / own-colour
+  tint / combo) plus a vision-based review that preferred the combo.
+- **Outcome**: the author tested and preferred the ORIGINAL black border; the
+  change was reverted. Kept as a documented trade-off. Worth citing in Q5/Q6:
+  an AI recommendation that was measured, rendered, and still overruled by the
+  human eye.
 
 ## Known limitations / TODOs
 

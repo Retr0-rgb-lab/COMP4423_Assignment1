@@ -323,6 +323,74 @@ and `code/pics/task3/summary/` (CSV + bar chart). Per-run files:
 `<name>.png` (render), `<name>_size_hist.png`, `<name>_palette.png`,
 `<name>_metrics.json`.
 
+## 7a. Prompt drafts (GenAI) -- reconstructed
+
+> Drafted from the recorded work below (algorithm choices, the two bugs, the
+> marginal-benefit log) for the report's Q4/Q5. RECONSTRUCTED DRAFTS, not a
+> verbatim transcript; the author confirms/adjusts the wording. Q6 is the
+> author's to write.
+
+### P1 -- algorithm landscape: quadtree vs region-merge
+
+- **v1**: "Task 3 needs multiple brick sizes + >3 colours, <=10000 triangles, no
+  gaps/overlaps. Compare a top-down quadtree with a rate-distortion split
+  priority against bottom-up region merging. Recommend one and say what could go
+  wrong."
+- **AI output**: recommended the top-down quadtree with a delta-MSE/6 priority
+  (per-triangle normalised so sizes are comparable); region merging as the dual.
+- **Outcome**: both implemented; the C_algorithm group measured the trade-off
+  (quadtree wins SSIM/EPI, region-merge wins dE2000/Quant -- see section 4).
+
+### P2 -- palette for K > 3
+
+- **v1**: "For >3 colours, compare K-Means in CIELAB against median cut in RGB.
+  Which scores better on perceptual vs pixel-level metrics?"
+- **AI output**: K-Means-Lab is perceptually better (lower dE2000); median cut
+  is cheaper and more deterministic. Measured: the D_palette split is
+  "perceptual colour vs pixel structure" (section 4).
+- **Extra**: the AI did NOT warn that `cv2.kmeans` is non-reproducible across
+  runs (global RNG) -- that was found later and is declared as a limitation.
+
+### P3 -- split priority: delta-MSE vs edge density
+
+- **v1**: "Should the quadtree split by delta-MSE or by Sobel edge density?
+  Which allocates the budget better?"
+- **AI output**: suggested edge-density priority (E_priority group).
+- **Measured**: it LOST on every metric -- the only negative EPI (-0.020) and
+  worst Edge F1 of the grid (section 4). Worth citing: a plausible AI suggestion
+  that the measurements rejected.
+
+### P4 -- the inverted-loop quadtree bug (AI-introduced)
+
+- **v1**: "Here is `quadtree_partition`: it starts at the coarsest grid and
+  splits while over budget. Review the loop condition."
+- **AI output (earlier)**: had written `if n_tri <= budget: return` plus
+  `while ... n_tri > budget`, i.e. the wrong mental model -- splitting INCREASES
+  the triangle count, so the loop must run WHILE budget remains. The bug made
+  the quadtree never split on sky.jpg (section 0).
+- **Outcome**: fixed to `while heap and n_tri + 6 <= max_triangles`; recorded as
+  an AI-introduced bug (Raw material for Q6 -- author's).
+
+### P5 -- at what size does splitting stop paying?
+
+- **v1**: "Merging 4 cells into 1 saves 6 triangles. Spent on finer detail
+  elsewhere, what is the NET benefit? At what cell size does splitting stop
+  being worth it?"
+- **AI output**: the marginal-benefit study (`task3_marginal.py`) -- a size-64
+  split is worth ~68x a size-2 split per triangle, and all size-2 splits
+  together contribute only 0.4% of the total error reduction (section 5.3).
+- **Outcome**: this drove the B2 (S_max) group; the working config became
+  S_max = 64 (section 5.4).
+
+### P6 -- region-merge stall
+
+- **v1**: "`region_merge_partition` stalls at 8640 merges and never reaches the
+  budget. Find the bug."
+- **AI output**: merge candidates were generated at every half-pixel offset, so
+  merged cells landed off the target grid and could never form the next level's
+  2x2 blocks. Fix: generate candidates aligned to the `target_size` grid
+  (section 0.5).
+
 ## 8. Known limitations / TODOs
 
 - **PSNR/ΔE slightly worse than the non-splitting version** — expected: the

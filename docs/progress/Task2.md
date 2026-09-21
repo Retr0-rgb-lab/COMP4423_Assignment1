@@ -23,10 +23,45 @@ wall + trees + distant buildings)**, not sky/cloud imagery. The name misled
 early intuition — it does NOT affect algorithm results, but the report
 should describe the actual content rather than the filename.
 
-## Prompt drafts (GenAI)
-- Task 2 used AI for design discussion only (algorithm landscape, interpolation
-  choices). Final implementation written from scratch with no code copied from
-  external sources. See `docs/progress/Task0_brief.md` for the algorithm survey.
+## Prompt drafts (GenAI) -- reconstructed
+
+> Drafted from the recorded work below for the report's Q4/Q5. RECONSTRUCTED
+> DRAFTS, not a verbatim transcript; the author confirms/adjusts the wording.
+> The implementation was written from scratch -- no code was copied from
+> external sources (AGENTS 8). Q6 is the author's to write.
+
+### P1 -- design the tessellation
+
+- **v1**: "Task 2: convert an image into equal-size RIGHT ISOSCELES triangles,
+  <=10000, 3 colours, no gaps/overlaps. Propose the tessellation and the grid
+  step S."
+- **AI output**: square cells each cut by one diagonal (2 triangles per cell);
+  S = the smallest side with `2*M*N <= 10000`; alternate the diagonal by
+  checkerboard parity so the mosaic has no single-direction smear.
+- **Outcome**: adopted; the diagonal convention is single-sourced in
+  `brick_geom.py` (module docstring).
+
+### P2 -- 3-colour quantisation
+
+- **v1**: "Compare three ways to pick exactly 3 colours: multilevel Otsu on
+  BT.601 luma, K-Means K=3 on BGR, and a fixed 33%/67% percentile split. Which
+  is the primary method and why are the others worth keeping?"
+- **AI output**: multi-Otsu as primary (thresholds adapt to the scene
+  histogram); K-Means and the fixed split as comparison baselines for Q5's
+  results-and-discussion. Add `_palette_by_luminance` so the three methods'
+  labels are ordered dark-to-bright and are therefore comparable.
+- **Outcome**: adopted; the 9-metric suite compares them (section
+  "Observations").
+
+### P3 -- find the "only 2 triangles" bug
+
+- **v1**: "The first run produced a 1x1 grid (2 triangles). Review
+  `compute_grid`: it should return the DENSEST legal grid."
+- **AI output**: the loop scanned S downward from `min(H,W)` and returned the
+  largest fitting S; flipping it to grow S upward and return the smallest S with
+  `2*M*N <= budget` fixes it.
+- **Outcome**: recorded as a "syntactically valid, semantically wrong"
+  direction-flip bug (see Problems and solutions); useful raw material for Q6.
 
 ## Code changes
 
