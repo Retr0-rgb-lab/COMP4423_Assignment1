@@ -62,6 +62,11 @@ def preprocess(img):
     mean BGR colour per triangle. Means are reused across `--method`
     choices so the comparison is fair (only the quantizer differs).
 
+    The image is reflect-padded to the exact grid extent (M*S x N*S) before
+    means are computed, so edge triangles sample real content instead of
+    dropping the trailing rows/columns as a black band. The padded means are
+    then rendered on a padded canvas and cropped back in the renderers.
+
     Shapes
     ------
     Input:
@@ -75,14 +80,25 @@ def preprocess(img):
       triangles  : list of (3, 2) int32 — 2*M*N triangles total. Each
                    `tri[k, 0]=x (col)`, `tri[k, 1]=y (row)`.
       means      : (T, 3) float32 — `means[i]` is the mean BGR colour of
-                   pixels inside `triangles[i]`. `means[i, 0]=B`,
-                   `means[i, 1]=G`, `means[i, 2]=R`.
+                   pixels inside `triangles[i]` (computed on the padded
+                   image). `means[i, 0]=B`, `means[i, 1]=G`, `means[i, 2]=R`.
+      padded_hw  : (pH, pW) ints — padded canvas size, pH = M*S, pW = N*S.
     """
     H, W = img.shape[:2]
     M, N, S = compute_grid(H, W)
     triangles = list(iter_triangles(M, N, S))
-    means = triangle_means_bgr(img, triangles)
-    return H, W, M, N, S, triangles, means
+    # Reflect-pad to the grid extent so no uncovered black band remains and
+    # the metric comparison against `img` sees a fully-covered canvas.
+    pH, pW = M * S, N * S
+    if (pH, pW) != (H, W):
+        pad_b = pH - H
+        pad_r = pW - W
+        padded = cv2.copyMakeBorder(img, 0, pad_b, 0, pad_r,
+                                    cv2.BORDER_REFLECT)
+    else:
+        padded = img
+    means = triangle_means_bgr(padded, triangles)
+    return H, W, M, N, S, triangles, means, (pH, pW)
 
 
 def quantize(method, means_bgr):
@@ -166,10 +182,11 @@ def run_single(img, method, args):
       metrics : dict — see `brick_metrics.compute_metrics` for keys.
                 Also contains the FPS for this method.
     """
-    H, W, M, N, S, triangles, means = preprocess(img)
+    H, W, M, N, S, triangles, means, padded_hw = preprocess(img)
     t0 = time.time()
     labels, palette = quantize(method, means)
-    canvas = render_triangles((H, W), triangles, labels, palette)
+    canvas = render_triangles(padded_hw, triangles, labels, palette,
+                              orig_shape=(H, W))
     elapsed = time.time() - t0
     n_tri = 2 * M * N
     metrics = compute_metrics(img, canvas, means, labels, palette, n_tri, elapsed)
@@ -222,7 +239,7 @@ def run_compare(img, args):
                           that order, which `make_metrics_bar_chart` relies on
                           for its legend and colours.
     """
-    H, W, M, N, S, triangles, means = preprocess(img)
+    H, W, M, N, S, triangles, means, padded_hw = preprocess(img)
     n_tri = 2 * M * N
     print(f"[task2:compare] grid = {M}x{N}, S={S}, T={n_tri}")
 
@@ -235,7 +252,8 @@ def run_compare(img, args):
     for method in ["otsu", "kmeans", "fixed"]:
         t0 = time.time()
         labels, palette = quantize(method, means)
-        canvas = render_triangles((H, W), triangles, labels, palette)
+        canvas = render_triangles(padded_hw, triangles, labels, palette,
+                                  orig_shape=(H, W))
         elapsed = time.time() - t0
         metrics = compute_metrics(img, canvas, means, labels, palette, n_tri, elapsed)
         counts = np.bincount(labels, minlength=3).tolist()

@@ -22,6 +22,7 @@ Why quadtree over region_merge (which had the single lowest ΔE, 8.63):
 
 Output: code/pics/task3/best/best_config.png + best_compare.png
 """
+import json
 import os
 import sys
 import time
@@ -153,6 +154,14 @@ def main():
         report(name, m, sizes)
         results.append((name, canvas, m, sizes))
         cv2.imwrite(os.path.join(OUT_DIR, f"{name}.png"), canvas)
+        # Persist the metrics so the report's quoted numbers (e.g. the
+        # region_merge dE=8.63 headline in the module docstring) trace back to a
+        # product file, not just prose. "Heatmap" is a ndarray and is dropped,
+        # matching triangle_brick_task3's on-disk JSON format.
+        metrics_to_dump = {k: v for k, v in m.items() if k != "Heatmap"}
+        with open(os.path.join(OUT_DIR, f"{name}_metrics.json"), "w") as f:
+            json.dump({k: (v if not isinstance(v, np.ndarray) else v.tolist())
+                       for k, v in metrics_to_dump.items()}, f, indent=2)
         if name == BEST[0]:
             best_canvas = canvas
 

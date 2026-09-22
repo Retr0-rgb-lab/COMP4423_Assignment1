@@ -60,21 +60,23 @@ def compute_grid(H, W, max_triangles=MAX_TRIANGLES):
 
     Function
     --------
-    Scan S from 1 upward; for each S compute M = H // S, N = W // S cells per
-    row/column and 2*M*N triangles (each cell splits into 2). Return the
-    smallest S that keeps the count <= max_triangles.
+    Scan S from 1 upward; for each S compute M = ceil(H / S),
+    N = ceil(W / S) cells per row/column and 2*M*N triangles (each cell
+    splits into 2). Return the smallest S that keeps the count
+    <= max_triangles. The ceil means the grid fully covers the image; the
+    caller pads the image to (M*S, N*S) and crops the render back, so no
+    trailing rows/columns are dropped as a black band.
 
     Shapes
     ------
     Input:
       H, W : ints — image height and width in pixels.
     Output:
-      (M, N, S) — M = ceil(H/S)-like cell count, N = ceil(W/S)-like cell
-                  count, S = the cell side length that fits the budget.
-                  `M, N >= 1` so a partial trailing row/column is dropped.
+      (M, N, S) — M = ceil(H/S), N = ceil(W/S), S = the cell side length
+                  that fits the budget.
     """
     for S in range(1, min(H, W) + 1):
-        M, N = H // S, W // S
+        M, N = (H + S - 1) // S, (W + S - 1) // S
         if M >= 1 and N >= 1 and 2 * M * N <= max_triangles:
             return M, N, S
     raise ValueError(f"Image {H}x{W} cannot be tiled under {max_triangles} triangles.")
