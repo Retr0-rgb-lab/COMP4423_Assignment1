@@ -9,6 +9,7 @@ file is an INDEX for the drafter, not report prose.
 Audited `code/pics/` against AGENTS §1.1 and the Task docs.
 
 ### Green (directly citable)
+
 - Task 2: `out_task2_{otsu,kmeans,fixed,compare,residual,metrics_chart}.png` + `out_task2.png` (Task2.md:225-228)
 - Task 3 four-piece sets (`<name>.png` + `_metrics.json` + `_palette.png` + `_size_hist.png`), 15 runs:
   A_ksweep{k04,k08,k16}, B_sweep{s_2_4_8_16_32,s_4_8_16_32,s_8_16_32}, B2_smax{smax_32,64,128},
@@ -19,6 +20,7 @@ Audited `code/pics/` against AGENTS §1.1 and the Task docs.
 - Task 4: L1_baseline, L3_means/{fast,mask,sample}, new_opt, old_base (each frame0001_{compare,input,render}.png)
 
 ### Red (missing / must regenerate)
+
 - `code/pics/task3/summary/best_vs_task2.png` — promised by AGENTS §1.1, does not exist
 - `code/pics/task3/best/*_metrics.json` — absent; the 8.63 headline in task3_best.py
   docstring has no product-file backing (trace only to Task3.md §10 prose)
@@ -27,6 +29,7 @@ Audited `code/pics/` against AGENTS §1.1 and the Task docs.
 
 Extracted from Task2.md:26-64, Task3.md:326-392, Task4.md:1070-1180.
 All drafts are RECONSTRUCTED (author must confirm wording). 17 prompts total:
+
 - Task 2: 3 prompts, 3 adopted (tessellation P1, 3-colour quantise P2, grid bug P3)
 - Task 3: 6 prompts, 5 adopted / 1 rejected (P3 edge-density priority measured & rejected)
   + P4 is an AI-introduced bug (quadtree inverted loop) fixed later
@@ -34,11 +37,13 @@ All drafts are RECONSTRUCTED (author must confirm wording). 17 prompts total:
   overruled by author) + P3 had a 0.56x wrong turn corrected
 
 Rejected/rolled-back = strong "identify AI limitations" material (Task 5):
+
 - Task3 P3: Sobel edge-density priority lost on EVERY metric (EPI -0.020)
 - Task4 P6: per-region freeze removed jitter but palette-freeze was catastrophic (PSNR 13.9 -> 9.9 dB)
 - Task4 P8: six border variants measured + rendered, author still preferred the original
 
 ### Writing tips (Q4 vs Q5)
+
 - Q4 = workflow (how used): decision chain design -> implement -> measure -> decide/rollback
 - Q5 = AI's understanding/mental model: quadtree split-direction misconception (Task3 P4),
   "per-call overhead not complexity" (Task4 P1), exact-vs-approximate framing (Task4 P1v2)
@@ -61,4 +66,22 @@ Rejected/rolled-back = strong "identify AI limitations" material (Task 5):
 `task3_best.py` now writes `<name>_metrics.json` per config (Heatmap dropped,
 format matches `triangle_brick_task3`). Verified region_merge_smax32_k16_lab:
 **dE=8.63**, SSIM=0.3392 — the docstring headline is now product-backed.
+
+## 5. Border-free ablation (measured 2026-09-22, chosen config)
+
+Same partition/palette/labels, border NOT drawn (fill only, then crop):
+
+| metric | with border (JSON) | border-free | delta |
+|---|---|---|---|
+| PSNR | 17.56 dB | **23.35 dB** | +5.8 |
+| SSIM | 0.359 | **0.571** | +0.21 |
+| ΔE2000 | 8.95 | **6.83** | -2.1 |
+| Edge F1 | 0.346 | **0.507** | +0.16 |
+| EPI | +0.046 | **+0.274** | +0.23 |
+| Quant Error | 5.79 | 5.79 | same |
+
+The border (23.6% of pixels, the most common colour) roughly halves measured
+fidelity. Comparisons/rankings unaffected (shared error term). Borderless
+numbers are the "colour-only" reading the PDF's "boundaries not a colour"
+clause implies; bordered numbers stay primary as the actual delivered output.
 
