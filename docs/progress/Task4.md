@@ -679,8 +679,8 @@ wrong turns worth keeping.
 | D1 -- vectorised triangles | `code/brick_geom.py` (`leaves_to_triangles_array`) |
 | D1 -- no double padding | `code/brick_quadtree.py` (`return_padded=True`) |
 | A -- batched render | `code/brick_render.py` (`render_triangles_batched`) |
-| C -- palette refresh cache | `code/frame_pipeline.py` (`PaletteState`) |
-| driver split + headless input | `code/frame_pipeline.py` (new), `code/camera_app.py` (slimmed, `--input`, `--palette-refresh`, `--sse precomp`) |
+| C -- palette refresh cache | `code/brick_pipeline.py` (`PaletteState`) |
+| driver split + headless input | `code/brick_pipeline.py` (new), `code/camera_app.py` (slimmed, `--input`, `--palette-refresh`, `--sse precomp`) |
 | correctness + benchmark gate | `code/task4_verify.py` |
 
 ## Level 3, step 4: A/B/C/D implemented and measured
@@ -693,9 +693,9 @@ the Task 2/3 paths stay behaviour-identical:
 |---|---|---|
 | B | `code/brick_prio.py` (new), `brick_quadtree.py` (`impl="precomp"`) | split-priority universe scored up front via exact-integer hierarchical sums; greedy loop runs on Python lists, zero numpy per split |
 | A | `code/brick_render.py` `render_triangles_batched` | <=K `fillPoly` calls (one per palette label) + ONE `polylines` for all borders |
-| C | `code/frame_pipeline.py` `PaletteState` | K-Means palette rebuilt every N frames (default 10), byte-stable between rebuilds |
+| C | `code/brick_pipeline.py` `PaletteState` | K-Means palette rebuilt every N frames (default 10), byte-stable between rebuilds |
 | D | `code/brick_geom.py` `leaves_to_triangles_array`; `quadtree_partition(return_padded=True)` | vectorised (T,3,2) triangle build; the padded image is carried from partition to means instead of being recomputed |
-| — | `code/frame_pipeline.py` (new), `camera_app.py` (slimmed) | per-frame engine moved out of the driver; `--input PATH` feeds the app from a file so the in-app benchmark runs headless |
+| — | `code/brick_pipeline.py` (new), `camera_app.py` (slimmed) | per-frame engine moved out of the driver; `--input PATH` feeds the app from a file so the in-app benchmark runs headless |
 | — | `code/task4_verify.py` (new) | assertion + paired-benchmark gate for all of the above |
 
 ### Correctness (task4_verify.py, synthetic 640x480, all asserted)
@@ -860,7 +860,7 @@ than continuous small drift.
   mean-subtracted 64x48 grey signature, `reuse_thresh`): static frames keep the
   SAME leaves and triangle array, means are still re-extracted from the live
   pixels, and the partition cost is skipped. Code: `brick_temporal.TemporalState`,
-  wired in `frame_pipeline.render_frame`.
+  wired in `brick_pipeline.render_frame`.
 - **C -- quantize hysteresis**: with geometry reused, triangle rows are stable,
   so a per-triangle label memory keeps the previous label unless a different
   palette entry is better by a relative margin (`--hysteresis`, default 0.1).
@@ -957,7 +957,7 @@ utilities (`task4_verify_util.py`) were split out -- 350 + 86 lines.
 
 New/changed code: `brick_means_rows.py` (new), `task4_verify_util.py` (new),
 `brick_means.py` (adds the "rows" method), `brick_temporal.py` (render cache),
-`frame_pipeline.py` (render reuse, `--means rows` default), `brick_display.py`
+`brick_pipeline.py` (render reuse, `--means rows` default), `brick_display.py`
 (HUD shows canvas CACHED/REDRAWN), `camera_app.py` (CLI).
 
 ## Level 3, step 7: display panel -- compact HUD and aspect-preserving fit
@@ -1053,8 +1053,8 @@ that we had missed.
 - The AE/WB lock is UNTESTED in this session (no camera); its read-back must be
   checked on the real machine.
 
-**Files.** `frame_pipeline.py` (freeze path + config), `brick_io.open_camera`,
-`camera_app.py` (flags); `powers_of_two_upto` moved to `frame_pipeline.py` to
+**Files.** `brick_pipeline.py` (freeze path + config), `brick_io.open_camera`,
+`camera_app.py` (flags); `powers_of_two_upto` moved to `brick_pipeline.py` to
 keep `camera_app.py` under the 400-line limit.
 
 ### Author's real-machine confirmation (2026-09-21)
