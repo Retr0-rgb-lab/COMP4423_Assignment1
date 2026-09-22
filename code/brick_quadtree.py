@@ -340,7 +340,7 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
     print(f"    [qt] done: splits={iters}, n_tri={n_tri}, cells={len(leaves)} "
           f"({time.time()-t0:.2f}s)")
     if return_padded:
-        # Task 4 optimization D1: the caller (frame_pipeline.render_frame)
+        # Task 4 optimization D1: the caller (brick_pipeline.render_frame)
         # needs the padded image for the means stage; handing it back removes
         # the duplicate pad_to_max the live loop used to pay. Optional so the
         # Task 2/3 callers keep their 3-tuple contract untouched.

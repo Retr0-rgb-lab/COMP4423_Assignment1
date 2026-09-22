@@ -109,7 +109,7 @@ def hud_lines(fps, info, cfg, paused, timer):
     where anyone reading numbers should look, not the live overlay.
 
     Shape/semantics: returns `list[str]`. `fps` is the caller's rolling FPS;
-    `info` supplies `n_tri`, `reused`, `render_reused` (see frame_pipeline);
+    `info` supplies `n_tri`, `reused`, `render_reused` (see brick_pipeline);
     `timer.report()` supplies the per-stage medians, so the overlay and the exit
     summary come from one identical measurement.
     """

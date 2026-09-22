@@ -13,7 +13,7 @@ quantizer (opt C, `brick_color_rt.quantize_nearest_bgr_sticky`) needs, because
 that memory is only valid while the triangle rows are stable -- i.e. while the
 geometry is reused. A real scene change invalidates both.
 
-This module holds ONLY the state and the decisions; `frame_pipeline.render_frame`
+This module holds ONLY the state and the decisions; `brick_pipeline.render_frame`
 does the actual partition/triangle work so there is no import cycle.
 """
 import cv2

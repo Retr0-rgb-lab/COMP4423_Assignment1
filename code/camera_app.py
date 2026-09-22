@@ -7,7 +7,7 @@ representations."
 
 This file is the DRIVER and stays thin (AGENTS 4.1): it parses arguments, owns
 the capture loop, draws the window and prints the stage summary. Everything
-that turns one frame into a rendered mosaic lives in `frame_pipeline.py`
+that turns one frame into a rendered mosaic lives in `brick_pipeline.py`
 (FrameConfig / PaletteState / render_frame), so the per-frame engine can be
 benchmarked and verified without a window or a camera.
 
@@ -45,7 +45,7 @@ import time
 import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from frame_pipeline import (FrameConfig, PaletteState, render_frame,
+from brick_pipeline import (FrameConfig, PaletteState, render_frame,
                             MEANS_METHODS, MAX_TRIANGLES,
                             powers_of_two_upto)  # noqa: E402
 from brick_temporal import TemporalState  # noqa: E402

@@ -1,7 +1,7 @@
 """
 task4_verify — correctness assertions + paired benchmarks for optimizations A/B/C/D.
 
-Runs headless (no camera, no window): it drives `frame_pipeline.render_frame`
+Runs headless (no camera, no window): it drives `brick_pipeline.render_frame`
 and the brick_* primitives directly on synthetic 640x480 frames. This is the
 verification gate the Task 4 record quotes: every optimization must pass its
 exactness assertion BEFORE its speed number is allowed into
@@ -54,7 +54,7 @@ from brick_render import (render_triangles, render_triangles_batched)  # noqa: E
 from brick_means import extract_means, means_by_masks  # noqa: E402
 from brick_means_rows import means_by_rows, compare_with_masks  # noqa: E402
 from brick_io import StageTimer  # noqa: E402
-from frame_pipeline import FrameConfig, PaletteState, render_frame  # noqa: E402
+from brick_pipeline import FrameConfig, PaletteState, render_frame  # noqa: E402
 from task4_verify_util import (synthetic_frame, quality_pair, best_of,
                                  churn)  # noqa: E402
 

@@ -1,5 +1,5 @@
 """
-frame_pipeline — the per-frame engine for the Task 4 live loop.
+brick_pipeline — the per-frame engine for the Task 4 live loop.
 
 Split out of `camera_app.py` (AGENTS 4.1: the driver stays thin; it should
 only parse args, own the capture loop and draw the window). Everything that
