@@ -175,6 +175,17 @@ Full table: `code/pics/task3/summary/metrics_table.csv`.
   whose boundaries still don't align with real edges (they just multiply
   small cells). This is a genuinely counterintuitive result for Task 5.
 
+  > **Reproducibility note (2026-09-22, handoff §3 item 3).** The recorded
+  > `prio_edgef1` row above was produced by the ORIGINAL per-region Sobel
+  > reference (`brick_quadtree` per-region Sobel). The current default
+  > `impl="sat"` runs Sobel once globally and its values differ near region
+  > edges (median ~2x relative difference for `edgef1`; identical for `mse`),
+  > so re-running today with the default does not reproduce this exact row.
+  > The CONCLUSION is robust either way — Sobel priority loses to ΔMSE on
+  > every metric under both implementations. The recorded numbers are pinned
+  > to this doc + `metrics_table.csv`; the code prints an explicit note when
+  > `edgef1` + `impl="sat"` is used (see `brick_quadtree.py`).
+
 ## 5. Research log: B-group anomaly → marginal-benefit analysis
 
 This section records *how* the investigation unfolded after the 12-run grid

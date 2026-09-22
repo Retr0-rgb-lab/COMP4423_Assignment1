@@ -97,9 +97,12 @@ should describe the actual content rather than the filename.
   luminance distribution forces each class to ~33% of triangles regardless of
   scene content. This is what the user requested for the comparison; it
   serves as a *naive baseline* that ignores scene statistics entirely.
-- **Square subdivisions of non-integer-multiple images**: trailing rows/cols
-  that don't form a full S×S square are dropped (1706-81*21=5 px wide,
-  1279-60*21=19 px tall).
+- **Square subdivisions of non-integer-multiple images**: FIXED 2026-09-22.
+  `compute_grid` now returns a ceil grid (M=ceil(H/S), N=ceil(W/S)) and the
+  driver reflect-pads the image to `M*S x N*S`, renders, then crops back.
+  Previously the trailing rows/cols that did not form a full S×S square were
+  dropped (1706-81*21=5 px wide, 1279-60*21=19 px tall), leaving a black band
+  that hurt PSNR/SSIM. Pre-fix behaviour preserved at commit `a5d2d76`.
 - **Degenerate histograms**: Multi-Otsu falls back to fixed `(85, 170)`
   thresholds when total=0.
 
@@ -118,20 +121,36 @@ Compare all three:
 ..\..\venv\Scripts\python code\triangle_brick.py --input code\pics\sky.jpg --output code\pics\task2\out_task2.png --compare --no-show
 ```
 
-Actual (`code/sky.jpg`, 1706×1279, after `--compare`):
+Actual (`code/sky.jpg`, 1706×1279, after `--compare`, **post black-band fix**):
+
+> **2026-09-22 update — black band fixed.** `compute_grid` now returns a
+> CEIL grid (fully covering the image) and the driver reflect-pads to
+> `M*S x N*S`, renders, then crops back to the original size — the same
+> scheme Task 3 already used. On `sky.jpg` this changes S from 21 to 22
+> (59×78 grid, T=9204 vs 60×81/T=9720) but removes the ~19px bottom + ~5px
+> right uncovered black margin that previously inflated PSNR/SSIM error.
+> Numbers below are the post-fix ones. The pre-fix numbers (S=21, 60×81,
+> T=9720) are preserved in git at commit `a5d2d76` (docs/progress/Task2.md
+> at that revision) for before/after comparison.
 
 ```
 [task2] input = ...\sky.jpg  shape = (1279, 1706)
-[task2:compare] grid = 60x81, S=21, T=9720
-[task2:otsu]   palette=[[57, 57, 55], [117, 119, 112], [218, 213, 202]]
-               counts=[4521, 2798, 2401]  SSIM=0.3226  PSNR=15.76dB
-[task2:kmeans] palette=[[57, 57, 56], [119, 120, 113], [219, 214, 202]]
-               counts=[4573, 2780, 2367]  SSIM=0.3230  PSNR=15.78dB
-[task2:fixed]  palette=[[48, 48, 48], [95, 96, 91], [199, 195, 185]]
-               counts=[3240, 3240, 3240]  SSIM=0.2748  PSNR=15.28dB
+[task2:compare] grid = 59x78, S=22, T=9204
+[task2:otsu]   palette=[[55, 55, 54], [117, 119, 112], [217, 212, 202]]
+               counts=[4319, 2672, 2213]  SSIM=0.3316  PSNR=16.15dB
+[task2:kmeans] palette=[[56, 56, 55], [118, 120, 113], [218, 213, 202]]
+               counts=[4385, 2626, 2193]  SSIM=0.3344  PSNR=16.16dB
+[task2:fixed]  palette=[[47, 47, 47], [93, 94, 89], [197, 193, 183]]
+               counts=[3068, 3068, 3068]  SSIM=0.2859  PSNR=15.56dB
 [task2:compare] grid image = ...\out_task2_compare.png
-[task2] total elapsed = 9.01s
+[task2] total elapsed = 40.94s
 ```
+
+Before/after on the fixed run (otsu): SSIM 0.3226 → 0.3316 (+2.8%), PSNR
+15.76 → 16.15 dB, ΔE2000 11.71 → 11.41. The direction is expected: the black
+band was pure error and is now covered by real (reflected) content. The grid
+is slightly coarser (S=21→22) because the ceil grid must stay within the
+10000-triangle budget with full coverage.
 
 ### Observations (raw material for Task 5 "results & discussion")
 
@@ -155,22 +174,28 @@ Actual (`code/sky.jpg`, 1706×1279, after `--compare`):
 
 After adding the metric suite, we re-ran `--compare` and got the following
 values on `code/sky.jpg` (1706×1279). All three methods share the same
-geometry (60×81 grid, S=21, 9720 triangles, budget utilization 0.972).
+geometry (**59×78 grid, S=22, 9204 triangles, budget utilization 0.920** —
+post black-band-fix run, 2026-09-22; the pre-fix 60×81/S=21/T=9720 numbers
+are preserved at commit `a5d2d76`).
 
 | Metric | otsu | kmeans | fixed | Best |
 |---|---|---|---|---|
-| PSNR ↑ (dB) | 15.76 | 15.78 | 15.28 | otsu ≈ kmeans |
-| SSIM ↑ | 0.323 | 0.323 | 0.275 | otsu ≈ kmeans |
-| MS-SSIM ↑ | 0.477 | 0.477 | 0.451 | otsu ≈ kmeans |
-| ΔE2000 ↓ | 11.71 | 11.67 | 12.12 | otsu ≈ kmeans |
-| Edge F1 ↑ | 0.187 | 0.190 | **0.232** | **fixed** ⚠️ |
-| Edge Precision ↑ | 0.145 | 0.147 | 0.169 | **fixed** ⚠️ |
-| Edge Recall ↑ | 0.264 | 0.268 | **0.370** | **fixed** ⚠️ |
-| EPI ↑ | -0.031 | -0.035 | -0.014 | **fixed** (least bad) ⚠️ |
-| Quant Error ↓ | 8.48 | 8.43 | 8.92 | otsu ≈ kmeans |
-| N triangles | 9720 | 9720 | 9720 | (same) |
-| Budget Util ↑ | 0.972 | 0.972 | 0.972 | (same) |
-| FPS (quantize+render+metrics only) | 18 | 26 | 33 | — |
+| PSNR ↑ (dB) | 16.15 | 16.16 | 15.56 | otsu ≈ kmeans |
+| SSIM ↑ | 0.332 | 0.334 | 0.286 | otsu ≈ kmeans |
+| MS-SSIM ↑ | 0.482 | 0.481 | 0.452 | otsu ≈ kmeans |
+| ΔE2000 ↓ | 11.41 | 11.41 | 11.92 | otsu ≈ kmeans |
+| Edge F1 ↑ | 0.191 | 0.189 | **0.233** | **fixed** ⚠️ |
+| Edge Precision ↑ | 0.151 | 0.150 | 0.171 | **fixed** ⚠️ |
+| Edge Recall ↑ | 0.261 | 0.255 | **0.365** | **fixed** ⚠️ |
+| EPI ↑ | -0.028 | -0.031 | -0.012 | **fixed** (least bad) ⚠️ |
+| Quant Error ↓ | 8.47 | 8.48 | 8.98 | otsu ≈ kmeans |
+| N triangles | 9204 | 9204 | 9204 | (same) |
+| Budget Util ↑ | 0.920 | 0.920 | 0.920 | (same) |
+| FPS (quantize+render+metrics only) | 4.6 | 4.5 | 6.6 | — |
+
+> The qualitative conclusions are unchanged by the fix: `fixed` still wins on
+> every edge metric, EPI is still negative for all three, and the perceptual
+> vs edge-preservation trade-off still holds.
 
 #### Counter-intuitive finding: `fixed` wins on edge metrics
 
@@ -231,9 +256,11 @@ were recorded before the move, when they sat in `code/`):
 
 - Performance: 9 s total for `compare` mode on this resolution (grid prep
   dominates: ~6 s of 9 s). Task 4 will need precomputed masks or downsampled
-  processing to hit real-time.
-- Edge handling: non-aligned pixels are truncated, not adapted (smaller
-  triangles at borders). Simple and acceptable for the report; mention it.
+  processing to hit real-time. (Post-fix compare run: ~41 s wall, dominated
+  by the per-triangle fillPoly means + 9-metric suite.)
+- Edge handling: the ceil grid + reflect padding covers the whole image; the
+  reflect pixels on the right/bottom edge are mirrored content, so edge
+  triangles sample a slightly smoothed neighbourhood. Acceptable and disclosed.
 - Single-image comparison. A second test image with strong color contrast
   (e.g., a fruit bowl) would be needed to demonstrate K-Means's hue advantage.
   Planned as future work.
