@@ -596,6 +596,16 @@ Metrics (9990 triangles, `sky.jpg`):
 | region_merge S_max=32 K=16 kmeans_lab | **8.63** | 0.339 | 17.59 | 0.298 | +0.015 |
 | region_merge S_max=32 K=16 median_cut | 9.47 | 0.338 | 17.54 | 0.336 | +0.016 |
 
+> **2026-09-22 value refresh (K-Means non-reproducibility, disclosed).**
+> `task3_best.py` now also writes `*_metrics.json` per config. A regenerated
+> run with `cv2.setRNGSeed(0)` gives the chosen config ΔE2000 **8.95** (SSIM
+> 0.359, PSNR 17.56, Edge F1 0.346, EPI +0.046) — see
+> `code/pics/task3/best/quadtree_smax32_k16_lab_metrics.json`. The 9.03 in this
+> table is an earlier K-Means-Lab run of the *same configuration*; the small
+> difference is the declared cv2.kmeans global-RNG non-reproducibility, not a
+> code change. The JSON files are now the authoritative values. Conclusion
+> unchanged: quadtree ≈ region_merge on colour, far better on structure.
+
 **Why quadtree, not region_merge**, even though region_merge has the single
 lowest ΔE (8.63): region_merge merges *all* fine cells away — its final sizes
 are only {16, 32} — so it has the **worst structure** of the grid (Edge F1
