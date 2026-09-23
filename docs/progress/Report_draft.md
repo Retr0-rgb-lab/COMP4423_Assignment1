@@ -10,6 +10,8 @@ writes personally (GenAI limitations; the Task-4 Level-2 scenes to capture).
 
 The report template requires six questions to be answered. Their locations:
 
+**Table 1. How this report answers the template questions (Q1-Q6 locations).**
+
 | Template question | Where answered |
 |---|---|
 | Q1. How do you design and test the program? | Sections 2 (Method), 3.1, 4.1, 5.1-5.4 |
@@ -60,6 +62,9 @@ wall, trees, distant buildings — not sky/cloud content. Its dominant signal is
 luminance variation rather than hue variation, which has a measurable effect on
 the colour-quantisation experiments (Sections 3 and 4).
 
+![Fig. 1. The shared test image `code/pics/sky.jpg` (1706x1279): a canal-side
+cityscape with brick architecture, trees and distant buildings.](code/pics/sky.jpg)
+
 **Narrator.** Throughout, "we" is the author + the GenAI collaboration this
 report documents; actions attributed to "the author" in the task sections are
 observations or decisions made on the real machine that the AI did not take
@@ -71,6 +76,8 @@ part in.
 
 All tasks share a geometry/colour/rendering core (`code/brick_geom.py`,
 `brick_color.py`, `brick_render.py`, `brick_metrics.py`). Design decisions:
+
+**Table 2. Design decisions of the shared geometry/colour/rendering toolkit.**
 
 | Component             | Choice                                                                                                                                               | Rationale                                                                                                                 |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -121,6 +128,8 @@ computed per method. Outputs: `code/pics/task2/out_task2_compare.png`
 
 ### 3.2 Results
 
+**Table 3. Task 2 results: three colour quantisers on identical geometry (59x78, S=22, 9,204 triangles, sky.jpg).**
+
 | Metric            | otsu   | kmeans | fixed           |
 | ----------------- | ------ | ------ | --------------- |
 | PSNR up (dB)      | 16.15  | 16.16  | 15.56           |
@@ -151,6 +160,19 @@ Three findings:
    grid introduces new boundaries that do not align with image content. This is
    the quantitative signature of the uniform grid's geometric mismatch, and the
    primary motivation for Task 3's adaptive tessellation.
+
+![Fig. 2. Task 2 comparison grid: the original image and the three
+colour-quantisation results (Multi-Otsu, K-Means, fixed percentile) on identical
+geometry, with their key metrics. `fixed` visibly collapses the sky into a
+mid-grey band (its 33%/67% split ignores scene statistics).](code/pics/task2/out_task2_compare.png)
+
+![Fig. 3. Per-pixel ΔE2000 residual heatmaps (JET, blue = small error) for the
+three quantisers. Otsu and K-Means are nearly identical with error concentrated
+in tree foliage; `fixed` adds a bright error band across the water.](code/pics/task2/out_task2_residual.png)
+
+![Fig. 4. Task 2 metric summary across the three quantisers (normalised and
+absolute scales). Otsu ≈ K-Means on colour/structure; `fixed` wins only the edge
+family.](code/pics/task2/out_task2_metrics_chart.png)
 
 ### 3.3 Problems found and solved
 
@@ -206,6 +228,8 @@ use 9,988-9,990 triangles (>=99.9% budget). Full table:
 `code/pics/task3/summary/metrics_table.csv`.
 
 ### 4.2 Results (selected rows)
+
+**Table 4. Task 3 results (selected rows of the 15-run sweep; source metrics_table.csv).**
 
 | run                  | SSIM up         | MS-SSIM up      | ΔE2000 down   | Edge F1 up      | EPI up           | Quant Err down |
 | -------------------- | --------------- | --------------- | -------------- | --------------- | ---------------- | -------------- |
@@ -263,6 +287,11 @@ Key findings (all on the single test image `sky.jpg`):
   region-merge wins colour (ΔE2000, Quant). Region-merge collapses to only
   {16,32} cells; quadtree keeps a {4,8,16,32} mix.
 
+![Fig. 5. All 15 Task 3 runs, per-metric bar chart (normalised and absolute
+scales). The sweep variables (K, S_min, S_max, partition, palette, priority) are
+on the x-axis groups; the structural-vs-colour split is visible across the
+whole grid.](code/pics/task3/summary/metrics_chart.png)
+
 ### 4.3 The marginal-benefit / rate-distortion study
 
 Driving S_max upward raised the question *"at what size does splitting stop
@@ -270,6 +299,8 @@ paying?"* A dedicated run with a 60,000-triangle budget recorded each split's
 marginal benefit (ΔSSE per new triangle) by parent size
 (`code/pics/task3/analysis/marginal_benefit_curve.png`,
 `benefit_by_size.png`, `cumulative_benefit_curve.png`):
+
+**Table 5. Marginal benefit of a split by parent cell size (60,000-triangle run).**
 
 | parent size | splits | mean ΔSSE/tri | share of total benefit |
 | ----------- | ------ | -------------- | ---------------------- |
@@ -285,6 +316,11 @@ size-2 splits together contribute only 0.4% of the total error reduction. This
 justified the S_max sweep (B2 group) and explains why a coarse starting grid
 frees budget for the deep splits that matter.
 
+![Fig. 6. Marginal benefit (ΔSSE per new triangle, log scale) against triangles
+used, with the 9,990 assignment budget marked. The greedy benefit decays from
+~3x10^6 to ~5x10^3; the budget cuts the curve where splits still pay but
+require ever-smaller cells.](code/pics/task3/analysis/marginal_benefit_curve.png)
+
 ### 4.4 S_max = 32 vs 64 — a two-sided trade-off
 
 The metric verdict "S_max=64 wins" is only one side. Breaking ΔE down by region
@@ -294,6 +330,8 @@ from K-Means-Lab's run-to-run variance — so its values are not directly
 comparable to the K-Means-Lab rows of Section 4.2 (where S_max=32 gives ΔE
 9.95, S_max=64 gives 10.21); the two sweeps agree in *direction* but differ in
 magnitude (`code/pics/task3/analysis/smax_curve.png`):
+
+**Table 6. S_max sweep (deterministic Median-Cut palette, K=8): perceptual vs structural metrics.**
 
 | S_max                   | 32              | 64    | 128   | 256   |
 | ----------------------- | --------------- | ----- | ----- | ----- |
@@ -325,6 +363,15 @@ Section 4.6 picks a balanced config instead of declaring a single winner, and
 it is the same episode that later shows up as an AI reporting bias in Section
 6.4.
 
+![Fig. 7. S_max sweep, two panels: perceptual colour error (ΔE2000, best at 32,
+then worsening and flat) versus structural metrics (SSIM / Edge F1 / EPI, rising
+to 64 then flat). The two families move in opposite directions — there is no
+single best S_max.](code/pics/task3/analysis/smax_curve.png)
+
+![Fig. 8. Cropped regions of the S_max=32 and S_max=64 renders against the
+original: the shadow/brick-wall crop shows the large-area colour drift under 64
+(mean ΔE 11.00 vs 7.61), while the sky crop is barely affected.](code/pics/task3/analysis/crop_shadow.png)
+
 ### 4.5 Problems found and solved
 
 - **QuadTree inverted-loop bug (AI-introduced).** The original code guarded
@@ -340,31 +387,13 @@ it is the same episode that later shows up as an AI reporting bias in Section
   aligned to the `target_size` grid; region_merge then reaches 9,990 triangles
   in ~1.7 s with 44,415 merges.
 
-### 4.7 Brick-size summary (Task 3 deliverable)
-
-The PDF asks Task 3 to output, besides the rendered image, a **brick summary**:
-the total number of bricks and the count for each brick size. The chosen config
-(Section 4.6) produces the following partition
-(`code/pics/task3/summary/brick_size_counts.json`):
-
-| cell size (px) | cells | bricks (=2x cells) |
-|---|---|---|
-| 4  | 724  | 1,448 |
-| 8  | 1,479 | 2,958 |
-| 16 | 981   | 1,962 |
-| 32 | 1,811 | 3,622 |
-| **total** | **4,995** | **9,990** |
-
-The quadtree reaches four brick sizes, so the multi-size requirement is met with
-a true {4,8,16,32} mix; the per-size histogram of the K=16 sweep run is
-`code/pics/task3/A_ksweep/k16_size_hist.png` and the JSON above is the count
-source.
-
 ### 4.6 Chosen configuration
 
 A **balanced** choice — near-best perceptual colour without throwing away
 structure (`code/task3_best.py`, `code/pics/task3/best/best_config.png`,
 `best_compare.png`):
+
+**Table 7. The chosen Task 3 configuration.**
 
 | setting   | value                     | why                                                                                 |
 | --------- | ------------------------- | ----------------------------------------------------------------------------------- |
@@ -376,6 +405,8 @@ structure (`code/task3_best.py`, `code/pics/task3/best/best_config.png`,
 | palette   | **kmeans_lab**      | better ΔE than median_cut                                                          |
 
 Metrics (9,990 triangles, `sky.jpg`):
+
+**Table 8. Metrics of the chosen configuration and its two rivals (seeded, from best/*_metrics.json).**
 
 | config                                               | ΔE2000        | SSIM            | PSNR  | Edge F1         | EPI              |
 | ---------------------------------------------------- | -------------- | --------------- | ----- | --------------- | ---------------- |
@@ -412,6 +443,39 @@ costs only +0.4 ΔE for a much better structure score. The comparison is
 reproducible: `task3_best.py` now writes per-config metrics JSON
 (`code/pics/task3/best/*_metrics.json`).
 
+![Fig. 9. The chosen configuration against its two region-merge rivals (original
++ three renders, key metrics per panel). The quadtree render keeps fine cells in
+detail regions that region-merge flattens.](code/pics/task3/best/best_compare.png)
+
+![Fig. 10. Task 2 (uniform grid, 3 colours) versus Task 3 (adaptive quadtree,
+K=16) on the same image: the adaptive tessellation concentrates small bricks on
+detail and large bricks on flat regions.](code/pics/task3/summary/best_vs_task2.png)
+
+### 4.7 Brick-size summary (Task 3 deliverable)
+
+The PDF asks Task 3 to output, besides the rendered image, a **brick summary**:
+the total number of bricks and the count for each brick size. The chosen config
+(Section 4.6) produces the following partition
+(`code/pics/task3/summary/brick_size_counts.json`):
+
+**Table 9. Brick-size summary of the chosen configuration (Task 3 deliverable).**
+
+| cell size (px) | cells | bricks (=2x cells) |
+|---|---|---|
+| 4  | 724  | 1,448 |
+| 8  | 1,479 | 2,958 |
+| 16 | 981   | 1,962 |
+| 32 | 1,811 | 3,622 |
+| **total** | **4,995** | **9,990** |
+
+The quadtree reaches four brick sizes, so the multi-size requirement is met with
+a true {4,8,16,32} mix; the per-size histogram of the K=16 sweep run is
+`code/pics/task3/A_ksweep/k16_size_hist.png` and the JSON above is the count
+source.
+
+![Fig. 11. Brick-size histogram of the chosen (K=16) quadtree run: a
+{4,8,16,32} mix with the most cells at size 8 and 32.](code/pics/task3/A_ksweep/k16_size_hist.png)
+
 ---
 
 ## 5. Task 4 — real-world camera scenario
@@ -443,6 +507,8 @@ suite; `code/task4_verify_util.py` its helpers).
 
 Full-quality config (quadtree, S_set=[1..32], K=16, kmeans_lab, budget=9990,
 640x480, scale=1.0):
+
+**Table 10. Task 4 measured baseline before optimisation (full-quality config, 640x480, 9,990 bricks).**
 
 | Stage                        | median ms        | mean ms          | Share              |
 | ---------------------------- | ---------------- | ---------------- | ------------------ |
@@ -484,6 +550,11 @@ immediately after `cap.read()`, reporting the camera's ~33 FPS no matter how
 slow the pipeline was; the timestamp is now taken after all per-frame work, so
 the HUD, the headless log and the benchmark share one measurement path.
 
+![Fig. 12. Task 4 Level 1, a real camera frame side by side with its
+triangle-brick render (K=16, 9,990-brick quality preset). Input and render are
+shown together because a mosaic judged without its input says nothing about
+fidelity.](code/pics/task4/L1_baseline/frame0001_compare.png)
+
 ### 5.4 Level 3: making it real-time (done)
 
 **Step 1: mean colour.** The shipped `triangle_means_bgr` has a real defect,
@@ -492,6 +563,8 @@ RIGHT and BOTTOM edges of every triangle (pixels whose centres belong to the
 neighbouring cell), so every Task 2/3 brick's colour is contaminated by its
 bottom-right neighbours — up to 400% leak on size-1 bricks, ~8% of pixels
 overall. Two new implementations (`code/brick_means.py`):
+
+**Table 11. Mean-colour implementations: speed and quality (640x480, 9,990 bricks).**
 
 | `--means`                    | FPS            | means stage       | whole frame      | ΔE2000         | PSNR               |
 | ------------------------------ | -------------- | ----------------- | ---------------- | --------------- | ------------------ |
@@ -516,6 +589,8 @@ were absent — a disclosed limitation. (Quantified with `compare_means` in
 split candidate. Two fixes: drop 4 dead SSE computations per split (436 -> 326
 ms), then replace numpy region means with **summed-area tables** (O(1)
 rectangle SSE), batched so numpy call count drops ~160,000-fold. Isolated:
+
+**Table 12. Partition implementation: summed-area tables vs numpy reference.**
 
 | Implementation        | 2000 bricks | 5000 bricks | 9990 bricks      |
 | --------------------- | ----------- | ----------- | ---------------- |
@@ -543,6 +618,8 @@ candidates up front, greedy loop pure Python) 107 -> ~30 ms, leaves bit-identica
 **C** palette refresh cadence (rebuild every 10 frames, byte-stable in between)
 23 -> ~2 ms amortised; **D** vectorised `leaves_to_triangles` 13 -> ~2 ms.
 Paired in-process benchmark (synthetic 640x480, reps=5):
+
+**Table 13. Whole-pipeline paired benchmark after optimisations A-D (synthetic 640x480, reps=5).**
 
 | stage                 | old                | new               | speedup                                     |
 | --------------------- | ------------------ | ----------------- | ------------------------------------------- |
@@ -582,6 +659,8 @@ pixels). C: **quantise hysteresis** — a per-triangle label memory keeps the
 previous label unless a different palette entry wins by a relative margin.
 Measured (churn = fraction of pixels whose max channel change exceeds 8 grey
 levels):
+
+**Table 14. Frame-to-frame jitter fixes (temporal coherence A+B+C): before/after.**
 
 | metric                                    | before           | after                         |
 | ----------------------------------------- | ---------------- | ----------------------------- |
@@ -681,6 +760,8 @@ across the three tasks: 14 adopted, 3 rejected/rolled-back after measurement.
 
 ### 6.1 Task 2 (3 prompts, all adopted)
 
+**Table 15. Task 2 GenAI prompts (reconstructed drafts).**
+
 | #  | Prompt intent                                                                                                       | AI output                                                                                                                                              | Outcome                                                         |
 | -- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
 | P1 | Design the tessellation: equal right-isosceles triangles, <=10000, 3 colours, no gaps/overlaps; propose grid step S | Square cells cut by one diagonal (2 tri/cell); S = smallest side with`2*M*N <= 10000`; alternate diagonal by checkerboard parity                     | Adopted; diagonal convention single-sourced in`brick_geom.py` |
@@ -688,6 +769,8 @@ across the three tasks: 14 adopted, 3 rejected/rolled-back after measurement.
 | P3 | First run produced a 1x1 grid; review`compute_grid`                                                               | Loop scanned S downward returning the largest fit; flip to grow upward and return the smallest S                                                       | Adopted; fixed the direction-flip bug                           |
 
 ### 6.2 Task 3 (6 prompts, 5 adopted / 1 rejected)
+
+**Table 16. Task 3 GenAI prompts (reconstructed drafts).**
 
 | #  | Prompt intent                                                        | AI output                                                                             | Outcome                                                                    |
 | -- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -699,6 +782,8 @@ across the three tasks: 14 adopted, 3 rejected/rolled-back after measurement.
 | P6 | `region_merge_partition` stalls at 8640 merges                     | Candidates generated off-grid; align to`target_size`                                | Adopted                                                                    |
 
 ### 6.3 Task 4 (8 prompts, 6 adopted / 2 rolled back)
+
+**Table 17. Task 4 GenAI prompts (reconstructed drafts).**
 
 | #  | Prompt intent                                             | AI output                                                                                                                          | Outcome                                                                                                                     |
 | -- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
