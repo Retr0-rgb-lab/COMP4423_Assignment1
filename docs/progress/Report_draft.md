@@ -37,11 +37,6 @@ the colour-quantisation experiments (Sections 3 and 4).
 ![Fig. 1. The shared test image `code/pics/sky.jpg` (1706x1279): a canal-side
 cityscape with brick architecture, trees and distant buildings.](code/pics/sky.jpg)
 
-**Narrator.** Throughout, "we" is the author + the GenAI collaboration this
-report documents; actions attributed to "the author" in the task sections are
-observations or decisions made on the real machine that the AI did not take
-part in.
-
 ---
 
 ## 2. Method — the shared toolkit
@@ -70,13 +65,14 @@ budget at 9,990 triangles. All Task 3 runs use 9,988-9,990 (budget utilisation
 >= 99.9%).
 
 **Metric evaluation region.** All PSNR/SSIM/ΔE/Edge/EPI numbers in Sections
-3-4 are computed on the *rendered canvas with the 1-px border drawn* (the only
-rendered output, per the PDF's "boundaries may be drawn" clause). The border is
-`#3C3C3C` and, at 9,990 bricks on `sky.jpg`, covers 23.6% of pixels — so it is
-a constant confound shared by every run, but its presence is disclosed here and
-its effect is quantified in Section 5.3. The `9-metric suite` therefore counts
-PSNR, SSIM, MS-SSIM, ΔE2000, Edge F1/Precision/Recall, EPI and Quantisation
-Error (9 quality metrics), with Budget Utilisation tracked as a constraint.
+3-4 are computed on the rendered canvas with the 1-px border drawn. The border
+is `#3C3C3C` and, at 9,990 bricks on `sky.jpg`, covers 23.6% of pixels, so it is
+a constant confound shared by every run; its effect is quantified in
+Section 5.3. The 9 quality metrics are PSNR, SSIM, MS-SSIM, ΔE2000,
+Edge F1/Precision/Recall, EPI and Quantisation Error, with Budget Utilisation
+tracked separately as a constraint. Appendix A gives the exact definition and
+the direction of each one, because several of them disagree with each other on
+purpose.
 
 ---
 
@@ -277,7 +273,7 @@ The metric verdict that S_max=64 wins is only one side of the story. Breaking Δ
 
 The mechanism behind the trade-off is that the RDO priority is ΔMSE, which scales with local variance. Edges get split and smooth regions are never split, so a whole large area ends up painted with one colour whose per-pixel error is small but whose *accumulated* perceptual error is large. ΔMSE cannot see large-area uniform drift, but the eye can.
 
-This episode is worth a separate note. On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 4.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 6.4.
+On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 4.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 6.4.
 
 ![Fig. 7. S_max sweep, two panels: perceptual colour error (ΔE2000, best at 32,
 then worsening and flat) versus structural metrics (SSIM / Edge F1 / EPI, rising
@@ -341,7 +337,7 @@ detail regions that region-merge flattens.](code/pics/task3/best/best_compare.pn
 K=16) on the same image: the adaptive tessellation concentrates small bricks on
 detail and large bricks on flat regions.](code/pics/task3/summary/best_vs_task2.png)
 
-### 4.7 Brick-size summary (Task 3 deliverable)
+### 4.7 Brick-size summary
 
 The PDF asks Task 3 to output, besides the rendered image, a brick summary with the total number of bricks and the count for each brick size. The chosen configuration from Section 4.6 produces the following partition, saved at `code/pics/task3/summary/brick_size_counts.json`.
 
@@ -364,13 +360,13 @@ The quadtree reaches four brick sizes, so the multi-size requirement is met with
 
 ## 5. Task 4 — real-world camera scenario
 
-### 5.1 Requirements and strategy
+### 5.1 What this task had to solve
 
 When I first ran Task 3's offline pipeline on the 1706x1279 reference image, partition plus means plus render plus metrics came out at roughly 0.1 FPS, so the speed question was already in the room before Task 4 began. Task 4 takes the chosen config from Section 4.6 and drops it into a camera loop at 640x480, which is where the speed and stability problems the offline setting hid become the central engineering problem I had to solve.
 
-The brief is to run the pipeline live: capture camera frames and display their triangle-brick representation. The grading levels stack on top of each other rather than adding up: camera plus display counts as L1, testing on different content counts as L2, and any one of real-time, different aspect ratios, different lighting, or quantitative evaluation bumps the work to L3. L4 then asks me to analyse the problems, improve the pipeline, and compare before/after numbers.
+The brief is to run the pipeline live: capture camera frames and display their triangle-brick representation. What that forces into the open is that a pipeline which is merely correct is not enough. A live loop has to finish each frame before the next one arrives, and it has to look stable while it does so. Both requirements turn out to be harder than the offline setting suggested, because the offline runs never had a deadline and never had to agree with themselves between one frame and the next.
 
-I picked real-time processing as my L3 lever, because the L4 requirement ("analyse -> improve -> compare before/after") is exactly the work of making the pipeline fast, and one workstream satisfies both levels. The deliverable is `code/camera_app.py`, a live loop that opens the camera at 640x480 with CAP_DSHOW, runs the full pipeline per frame, and shows input and render side by side in a resizable window with a compact HUD (q quits, s snaps, p pauses, r resets). I also built a headless `--no-show --input <clip>` mode so that every number in this section can be reproduced without a camera; `code/task4_verify.py` is the assertion suite and `code/task4_verify_util.py` holds the helpers.
+I took real-time processing as the main thread, because making the pipeline fast is also the natural way to find out what is actually wrong with it. Profiling first and fixing only what the profile indicts turned out to be the method that carried the whole task: every change in Section 5.4 came from a measured bottleneck, and every one of them is paired with the before/after numbers that motivated it. The deliverable is `code/camera_app.py`, a live loop that opens the camera at 640x480 with CAP_DSHOW, runs the full pipeline per frame, and shows input and render side by side in a resizable window with a compact HUD (q quits, s snaps, p pauses, r resets). I also built a headless `--no-show --input <clip>` mode so that every number in this section can be reproduced without a camera; `code/task4_verify.py` is the assertion suite and `code/task4_verify_util.py` holds the helpers.
 
 ### 5.2 Measured baseline (before any optimisation)
 
@@ -403,16 +399,16 @@ baseline is an 8-frame run; the corrected palette figures are 30-frame runs;
 per-stage isolation figures are single-frame-repeat or 12-frame paired runs
 (details in `docs/progress/Task4.md`).
 
-### 5.3 Level 1: camera capture + display (done)
+### 5.3 Camera capture and display
 
 `camera_app.py` opens the real camera, runs the full pipeline per frame, and shows a side-by-side window. I verified the display numerically against `code/pics/task4/L1_baseline/frame0001_{input,render,compare}.png`: the render has exactly 17 distinct colours (K=16 palette + 1 border colour); the border `(60,60,60)` covers 72,480 px, or 23.6%, which makes it the single most common colour in the render and measurably affects metrics, so the render path is the only place a border is drawn; the palette spans the full dark-to-bright range with a real spread of hues; and overall contrast is preserved (render std 66.4 vs input 68.2). One defect caught me during this stage: the HUD's FPS first read its timestamp immediately after `cap.read()`, so it reported the camera's own ~33 FPS no matter how slow the pipeline was. The timestamp is now taken after all per-frame work, and the HUD, the headless log and the benchmark share one measurement path.
 
-![Fig. 12. Task 4 Level 1, a real camera frame side by side with its
+![Fig. 12. A real camera frame side by side with its
 triangle-brick render (K=16, 9,990-brick quality preset). Input and render are
 shown together because a mosaic judged without its input says nothing about
 fidelity.](code/pics/task4/L1_baseline/frame0001_compare.png)
 
-### 5.4 Level 3: making it real-time (done)
+### 5.4 Meeting the real-time constraint
 
 **Step 1: mean colour.** The shipped `triangle_means_bgr` has a real defect, not just a speed problem: `cv2.fillPoly` paints a one-pixel fringe along the RIGHT and BOTTOM edges of every triangle (pixels whose centres belong to the neighbouring cell), so every Task 2/3 brick's colour is contaminated by its bottom-right neighbours. The leak is up to 400% on size-1 bricks and around 8% of pixels overall. I added two new implementations in `code/brick_means.py`:
 
@@ -519,7 +515,7 @@ scaling into the window's image area, so OpenCV's stretch becomes the identity).
 
 **Step 8: reuse freezes colour + camera AE/WB lock.** Even after A+B+C, a static scene still showed residual colour churn (0.101% of pixels/frame) because means and quantize were still re-running every frame. The fix is, when the partition is reused, also freeze the previous labels plus the canvas, which makes an unchanged scene byte-identical frame to frame. I also locked the camera's auto-exposure and white-balance (`--lock-ae`) because a steady exposure is what makes freezing colour safe rather than stale. Measured: churn 0.101% -> **0.000%**, static effective FPS 22.6 -> **37.1**. I confirmed on the real camera that the jitter is noticeably reduced and the fidelity is no worse.
 
-### 5.5 Level 2: different content
+### 5.5 Behaviour across different content
 
 The same pipeline was run on seven scenes of different content, captured
 with `camera_app.py --lock-ae --snapshot-dir code/pics/task4/` (each snap
@@ -527,7 +523,7 @@ stores input + render side by side, see e.g. `code/pics/task4/snap_000.png`).
 The seven scenes cover face, strong texture, low light, backlight / high
 contrast, and large flat regions.
 
-![Fig. 13. Task 4 Level 2: seven scenes of different content captured on the
+![Fig. 13. Seven scenes of different content captured on the
 real camera with the full pipeline. Each snap pairs the raw camera frame (left)
 with its triangle-brick render (right). The adaptive tessellation concentrates
 small bricks on detail regions (faces, keyboard, lamp glow) and uses large
@@ -545,9 +541,9 @@ Row 6 (snap_006): wall with switch and window light bar, mostly flat with a
 narrow dynamic range on the switch. The palette reuses across frames within
 tolerance (`--palette-refresh 10`); no per-scene recalibration was needed.
 
-### 5.6 Level 4: before/after summary
+### 5.6 Summary of the measured changes
 
-Every optimisation I made in §5.4 is a paired before/after with stage ms, whole-frame FPS, ΔE/PSNR, and a pixel-diff check, so the L4 requirement ("analyse -> improve -> compare") is documented for every change. The headline reads cleanly only when each number's measurement conditions are attached. With that in mind: the full live pipeline including camera read goes from 0.45 FPS to about 4.6 FPS at the full quality config (whole frame 2140 -> ~215 ms); on static input the temporal reuse lifts the effective rate further, to roughly 37 FPS in headless mode without camera read-back (the camera's own 31-33 FPS read is a separate ceiling); and the processing-only path on synthetic frames reaches about 16.8 FPS. The spatial optimisations are exact, with 0 differing pixels on identical input. The temporal layer (palette cadence, warm-start, dead-band, hysteresis, freeze-on-reuse) is a deliberate frame-to-frame approximation made for stability, and it does trade a small amount of fidelity for that stability, which is why paired ratios, not absolute FPS, are the trustworthy numbers here (see Section 5.2).
+Every optimisation I made in §5.4 is a paired before/after with stage ms, whole-frame FPS, ΔE/PSNR, and a pixel-diff check, so each change is documented against the measurement that motivated it. The headline reads cleanly only when each number's measurement conditions are attached. With that in mind: the full live pipeline including camera read goes from 0.45 FPS to about 4.6 FPS at the full quality config (whole frame 2140 -> ~215 ms); on static input the temporal reuse lifts the effective rate further, to roughly 37 FPS in headless mode without camera read-back (the camera's own 31-33 FPS read is a separate ceiling); and the processing-only path on synthetic frames reaches about 16.8 FPS. The spatial optimisations are exact, with 0 differing pixels on identical input. The temporal layer (palette cadence, warm-start, dead-band, hysteresis, freeze-on-reuse) is a deliberate frame-to-frame approximation made for stability, and it does trade a small amount of fidelity for that stability, which is why paired ratios, not absolute FPS, are the trustworthy numbers here (see Section 5.2).
 
 ### 5.7 Problems found and solved (Task 4)
 
@@ -772,10 +768,100 @@ non-reproducible, and I re-generate all headline numbers from
 
 The limitations I want to be honest about: a single test image for Task 2
 and Task 3, K-Means non-reproducibility (declared, bounded), and measurements
-from a single machine for Task 4. The Level-2 scene testing is done
-(§5.5), but it is seven frames from one camera in one room, which is enough
+from a single machine for Task 4. The multi-scene testing (§5.5)
+covers seven frames from one camera in one room, which is enough
 to show the pipeline is not tuned to one image and not enough to claim
 generalisation.
+
+---
+
+## Appendix A. Definitions of the evaluation metrics
+
+Every number quoted in Sections 3 to 5 comes from `code/brick_metrics.py`, and
+each metric answers a different question about the same render. This appendix
+states what each one computes so the results can be read without guessing.
+
+**PSNR** (higher is better) is the peak signal-to-noise ratio between the source
+and the render, computed per channel over the whole image and reported in dB:
+
+    PSNR = 10 * log10( MAX^2 / MSE ),  MAX = 255
+
+It is the most familiar number here and the least discriminating, because a
+large uniform colour shift costs it as much as a small structural error.
+
+**SSIM** (higher is better) is the structural similarity index of Wang et al.
+(2004), computed per channel on a sliding odd window of at most 7x7 pixels
+(smaller only if an image dimension forces it) and averaged. SSIM scores local
+contrast and luminance structure rather than raw pixel agreement, so it
+penalises a blurred or structurally displaced render more than a uniformly
+brightness-shifted one.
+
+**MS-SSIM** (higher is better) is the mean of the SSIM score computed at four
+progressively downsampled resolutions, using Gaussian-pyramid decimation
+(`cv2.pyrDown`) between levels. Averaging across scales rewards structure that
+survives decimation, so it is harder to satisfy with a good low-resolution
+match and noise at the finest scale. This is a four-level arithmetic mean of
+per-level SSIM, which is a simplification of the weighted formulation in Wang
+et al. (2003); it is not the standard MS-SSIM weighting, and the numbers in
+this report should be read as a multi-scale consistency check rather than as a
+comparable-to-literature score.
+
+**ΔE2000** (lower is better) is the mean per-pixel CIEDE2000 colour difference
+between source and render, computed after converting both from sRGB through
+CIE Lab (Sharma et al., 2005). It is the perceptual colour metric of the suite;
+roughly, a value above 2 is a clearly visible colour difference, and the values
+in this report (roughly 6 to 12) correspond to differences that are obvious on
+side-by-side inspection.
+
+**Edge F1, precision and recall** (higher is better) compare Canny edge maps of
+the source and the render, both extracted with `sigma = 2.0`. Because a
+triangle boundary can sit a pixel away from a true edge and still look aligned,
+each edge map is dilated by a 3-pixel tolerance and an edge pixel counts as
+matched when it falls inside the other map's dilated version:
+
+    precision = |render edges near a source edge| / |all render edges|
+    recall    = |source edges near a render edge| / |all source edges|
+    F1        = 2 * precision * recall / (precision + recall)
+
+Note that the two ratios use different reference sets: precision asks how much
+of what the mosaic drew is real structure, recall asks how much of the real
+structure the mosaic reproduced. The dilation is one-sided, so a match just
+outside the tolerance band is missed by both directions.
+
+**EPI, edge-alignment correlation** (signed, higher is better) is the Pearson
+correlation between the mean-centred Sobel gradient-magnitude fields of source
+and render:
+
+    EPI = corr( |∇ source| , |∇ render| )
+
+It measures whether edge energy in the mosaic is co-located with edge energy in
+the source, independent of overall intensity. A positive value means the two
+agree about where the edges are; a negative value means they disagree, which in
+this project is the signature of triangle boundaries that do not follow image
+content. Because the magnitudes are sparse and heavy-tailed, a correct mosaic
+still scores near zero, so EPI is read as a direction rather than as a
+magnitude. The name is local to this report: it is a plain Pearson correlation
+of Sobel magnitudes and is not the Edge-Preservation Index of the image-fusion
+literature.
+
+**Quantisation error** (lower is better) is the mean CIEDE2000 distance between
+each triangle's own mean colour and the palette entry it was assigned. It
+isolates the colour-quantisation half of the pipeline from the geometry half,
+because it never looks at the rendered image. A high quantisation error with a
+reasonable PSNR means the geometry is fine but the palette cannot represent the
+image, which is the diagnostic that separated the K sweep from the S_max sweep
+in Section 4.
+
+**Budget utilisation** is not a quality metric but the fraction of the 10,000
+bricks the run consumed, `N / 10000`. All Task 3 runs sit at 0.998 to 0.999.
+
+**Framing of the suite.** The metrics are deliberately not redundant. PSNR and
+quantisation error see colour; SSIM and MS-SSIM see structure at one and many
+scales; ΔE2000 sees perceptual colour distance; edge F1 sees whether detected
+edges coincide; EPI sees whether edge energy is co-located; and the residual
+map in Figure 3 shows where the two images disagree rather than how much. The
+disagreements between them, rather than any single score, are what produced the
+findings in Sections 3.2 and 4.4.
 
 ---
 
