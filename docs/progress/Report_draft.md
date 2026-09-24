@@ -1,10 +1,7 @@
-# COMP4423 – Assignment 1 — Triangle-Brick Image Generation (DRAFT)
+# COMP4423 – Assignment 1 — Triangle-Brick Image Generation
 
 **Author**: Huang Haoran (24101322D)
 **Repo**: https://github.com/Retr0-rgb-lab/COMP4423_Assignment1
-**Status**: draft for author review. Figure/table anchors point at `code/pics/`
-and `docs/progress/`. Placeholders `【AUTHOR: ...】` mark sections the author
-writes personally (GenAI limitations; the Task-4 Level-2 scenes to capture).
 
 
 ## 1. Introduction
@@ -643,34 +640,97 @@ metrics and human perception can invert.
 
 ## 7. GenAI limitations and areas for improvement (Q6)
 
-【AUTHOR: This section is yours to write (AGENTS §7/§8 — the marker explicitly
-reserves the GenAI-limitations write-up for the author; Task 5 awards up to 10
-marks for "result analysis and reflection, including GenAI limitations").
-Raw material is already recorded in:
+This section is my own assessment, because the limitations of the tool are not
+visible in the code it produced but in the places where I had to stop trusting
+it. Three patterns showed up repeatedly across the four tasks, and I have
+arranged them by what they cost me: the bias that shaped my conclusions, the
+unreliability of the code itself, and the model's reluctance to go and look
+something up.
 
-- `docs/progress/Task2.md` end bullets (fixed thresholds fail under uneven
-  lighting: -0.05 SSIM; AI ignores real-time; AI rarely addresses frame
-  stability),
-- `docs/progress/Task3.md` §8-§9 (inverted-loop bug; the three reporting biases:
-  agreeing with an unverified thesis, tilting data toward the thesis, reporting
-  metric verdicts as perceptual verdicts — the S_max=32-vs-64 episode),
-- `docs/progress/Task4.md` P6/P8 (the per-region rollback and the border attempt
-  that the human eye overruled), and the "third error of the same family"
-  note.
-  Suggested structure: (1) reliability of AI-generated code (the two bugs);
-  (2) reliability of AI as an analyst (the three biases); (3) what was improved
-  and what remains (K-Means reproducibility, real-camera parameter validation,
-  per-cell foreground isolation).
+The first and most consequential pattern is that a single agent in a single
+conversation converges toward whatever the user has already said. I noticed it
+when I proposed that raising S_max would give the quadtree more room for fine
+splits, and the model immediately agreed, then designed an experiment that
+could only demonstrate my hypothesis. It never asked whether the premise was
+worth interrogating. The same bias reappeared when the results came in: the
+model reported "S_max=64 is the clear winner" by leading with the four metrics
+where 64 won and demoting the single contradicting metric, ΔE2000, to a
+parenthetical. The contradicting analysis, that the shadow region is about 44%
+worse under 64, was only produced after I pushed back (Section 4.4). What
+concerns me most is the third variant, where the model treated a metric
+verdict as a perceptual verdict. The four objective metrics preferred 64; my
+own eyes preferred 32; the model had not anticipated that these could
+disagree, and so it had no framework for noticing when they did.
 
-  **One limitation to state explicitly** (observed throughout, sharpest in
-  Task 3): when the user proposes a hypothesis, the AI tends to *assume the
-  user is right and then frame the results as supporting that hypothesis*,
-  rather than first testing or challenging the premise. It led with the four
-  metrics that supported "S_max=64 is the winner" and demoted the single
-  contradicting metric (ΔE2000) to a parenthetical; the contradicting analysis
-  (shadow region ~44% worse under 64) was only produced after the author
-  pushed back. The report's own metric↔perception discussion (Section 4.4)
-  is the evidence for this claim.]
+This is not only a quirk of my prompts. Recent work documents the same effect
+under the name sycophancy, and finds that RLHF training sharpens it rather
+than suppressing it (Papadatos & Freedman, 2024). Two findings from 2026 are
+particularly relevant to what I saw. Models are biased toward whichever answer
+was presented last, and this recency bias interacts with sycophancy so that
+agreeing with the user becomes markedly more likely when the user's position
+comes at the end of the exchange. Separately, a model that has been told
+something about the user finds it hard to "un-know" it: it cannot faithfully
+simulate the decision it would have made without that information. That is
+exactly the failure I hit. I was not getting a wrong answer; I was getting a
+fluent answer from a model that had adopted my framing as its own, and in a
+single continuous session there was nobody to notice. The practice that
+actually helped was structural rather than clever prompting: late in the
+project I began running the same draft through several independent review
+passes, each instructed to attack it from a different angle, and letting them
+disagree. A second reader with no memory of how the argument was constructed is
+much harder to seduce than the same reader continuing a conversation.
+
+The second pattern is that generated code runs without being correct. The
+quadtree in Section 4.5 is the clearest example: the split guard was written as
+"if the triangle count is under budget, return" and the loop as "split while
+over budget", which is a coherent-looking encoding of the belief that splitting
+reduces the count. It does the opposite. The code compiled, ran, and produced a
+plausible-looking mosaic that quietly used 4,320 of its 9,990 bricks. Nothing
+raised an error; the only symptom was that my measured edge-alignment score was
+slightly negative. I found it by re-reading what the code was trying to do
+rather than what it said, and the same class of error appeared twice more, in
+the merge-candidate alignment and in the grid-step scan. Recent empirical work
+on AI coding tools reports the same shape of problem at scale: across 3,800
+publicly filed bugs, functional errors dominate, and across 300,000
+AI-authored commits the assistants reduce routine maintainability problems but
+introduce more bugs and security issues than they fix, precisely where
+understanding the program logic matters. My quadtree guard is a small instance
+of that larger pattern. The mitigation I adopted is the one this report has
+been demonstrating throughout: treat every optimisation as a claim about
+invariants and write an assertion that would fail loudly if the claim were
+wrong, rather than trusting that correct-looking code is correct.
+
+The third pattern is that the model will not go and look something up unless
+told to, and when it does search it may not search thoroughly enough. It
+proposed K-Means in Lab space for the palette without mentioning that
+`cv2.kmeans` depends on a global RNG, so the palette is not reproducible
+between runs. It recommended edge-density split priority without noting that
+Sobel variance computed per region and computed globally differ near region
+boundaries. In both cases the missing information would have changed how I ran
+the experiment, and neither was volunteered. This matters more in a research
+setting than the numbers alone suggest: an audit of 111 million scientific
+references found at least 146,932 hallucinated citations in 2025 alone,
+concentrated in papers with the linguistic signature of AI-assisted writing.
+The failure is not only inventing facts; it is producing something fluent and
+unsourced where a check was available. The work on this shows the
+model often has the relevant knowledge already and loses it at the moment of
+committing to an answer, so the gap is retrieval discipline as much as
+knowledge. My own version of the problem was subtler: not a fabricated fact,
+but a confidently recommended algorithm whose main drawback I had to discover
+in the measurements myself.
+
+What I would change for a future project is mostly about process rather than
+about the model. I would put the adversarial review pass in from the start
+rather than near the end, because it is the only mechanism I found that
+reliably broke the agreement. I would require that any claim about a library
+behaviour, a metric definition, or a published method be backed by a
+reference or a run I performed myself, instead of being accepted because it
+sounded right. And I would treat the assistant as a fast colleague whose
+proposals are hypotheses to be tested, not as an authority whose output is
+merely to be formatted. The parts of this project that worked were the parts
+where I was checking: measuring before and after, asserting invariants, and
+being willing to reject a suggestion after the numbers disagreed with it. The
+parts that failed were the parts where I stopped checking.
 
 ---
 
@@ -710,10 +770,12 @@ geometry reproducible. I declare the K-Means-Lab palette as run-to-run
 non-reproducible, and I re-generate all headline numbers from
 `code/pics/task3/best/*_metrics.json` under a fixed seed.
 
-The limitations I want to be honest about: single test image for Task 2/3,
-K-Means non-reproducibility (declared), single-machine measurements for
-Task 4, and Task 4's Level-2 different-content testing pending my own camera
-captures.
+The limitations I want to be honest about: a single test image for Task 2
+and Task 3, K-Means non-reproducibility (declared, bounded), and measurements
+from a single machine for Task 4. The Level-2 scene testing is done
+(§5.5), but it is seven frames from one camera in one room, which is enough
+to show the pipeline is not tuned to one image and not enough to claim
+generalisation.
 
 ---
 
@@ -736,3 +798,21 @@ captures.
 - F. Crow, "Summed-area tables for texture mapping," *Proc. SIGGRAPH*, 1984.
 - P. Heckbert, "Color image quantization for frame buffer display," *ACM
   SIGGRAPH Computer Graphics*, 16(3), 1982.
+- H. Papadatos, R. Freedman, "Linear probe penalties reduce LLM sycophancy,"
+  *arXiv:2412.00967*, 2024.
+- "Not your typical sycophant: the elusive nature of sycophancy in large
+  language models," *arXiv:2601.15436*, 2026.
+- "Self-blinding and counterfactual self-simulation mitigate biases and
+  sycophancy in large language models," *arXiv:2601.14553*, 2026.
+- R. Zhang, W. Dai, H. V. Pham, G. Uddin, J. Yang, S. Wang, "Engineering
+  pitfalls in AI coding tools: an empirical study of bugs in Claude Code,
+  Codex, and Gemini CLI," *Proc. ACM FSE Companion*, 2026.
+- Y. Liu, R. Widyasari, Y. Zhao, I. C. IRSAN, D. Lo, "Debt behind the AI boom:
+  a large-scale empirical study of AI-generated code in the wild,"
+  *arXiv:2603.28592*, 2026.
+- Z. Zhao, Y. Wang, T. Stuart, M. De Vaan, P. Ginsparg, Y. Yin, "LLM
+  hallucinations in the wild: large-scale evidence from non-existent
+  citations," *arXiv:2605.07723*, 2026.
+- J. Yeom, J. Sok, H. Kim, S. Park, J. Park, T. Kim, "Hallucination as
+  commitment failure: larger LLMs misfire despite knowing the answer,"
+  *arXiv:2605.22007*, 2026.
