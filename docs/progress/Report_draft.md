@@ -65,7 +65,7 @@ the one thing each task changes. Table 1 summarises them.
 | Palette (Task 3)      | **K-Means on CIE-Lab** (K=8/16), Median-Cut as baseline                                                                                        | Lab is perceptually uniform; median cut is cheap and deterministic                                                        |
 | Tessellation (Task 3) | **Top-down RDO quadtree**, split priority ΔMSE per triangle (ΔSSE/6); region-merge as dual algorithm                                         | Rate–distortion allocation: equal per-triangle units make different sizes comparable                                     |
 | Border                | 1-px`#3C3C3C` polyline per triangle                                                                                                                | Visual separation; PDF permits drawn boundaries, not counted as brick colours                                             |
-| Metrics               | 9-metric suite: PSNR, SSIM, MS-SSIM (4-level mean, a practical variant of Wang et al. multi-scale SSIM), ΔE2000 (CIEDE2000), Edge F1/Precision/Recall (Canny + 3-px tolerance), **edge-alignment correlation (EAC; Pearson correlation of Sobel responses — labelled "EPI" below for short)**, Quantisation Error, Budget Utilisation | Each metric catches a different failure mode; the EAC/EPI metric specifically measures whether triangle boundaries align with real edges |
+| Metrics               | 10-item metric suite (9 quality + 1 constraint): PSNR, SSIM, MS-SSIM (4-level mean, a practical variant of Wang et al. multi-scale SSIM), ΔE2000 (CIEDE2000), Edge F1/Precision/Recall (Canny + 3-px tolerance), **edge-alignment correlation (EAC; Pearson correlation of Sobel responses — labelled "EPI" below for short)**, Quantisation Error, Budget Utilisation | Each metric catches a different failure mode; the EAC/EPI metric specifically measures whether triangle boundaries align with real edges |
 
 **Budget semantics.** The limit is 10,000 *triangles* ("bricks"); a quadtree
 leaf cell produces 2 triangles, so a partition of 4,995 cells exhausts the
@@ -98,7 +98,7 @@ histogram, the last being a deliberately naive baseline that ignores scene
 statistics entirely.
 
 *How it was tested.* All three share one geometry (59x78, S=22, 9,204 triangles
-on `sky.jpg`) so only the quantiser differs; the full 9-metric suite is
+on `sky.jpg`) so only the quantiser differs; the full 10-item metric suite is
 computed per method. Outputs: `code/pics/task2/out_task2_compare.png`
 (original + 3 renders), `out_task2_residual.png` (per-pixel ΔE2000 heatmaps),
 `out_task2_metrics_chart.png`.
@@ -280,11 +280,11 @@ The metric verdict that S_max=64 wins is only one side of the story. Breaking Δ
 
 The mechanism behind the trade-off is that the RDO priority is ΔMSE, which scales with local variance. Edges get split and smooth regions are never split, so a whole large area ends up painted with one colour whose per-pixel error is small but whose *accumulated* perceptual error is large. ΔMSE cannot see large-area uniform drift, but the eye can.
 
-I want to flag this episode as a finding. On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 4.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 6.4.
+This episode is worth a separate note. On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 4.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 6.4.
 
 ![Fig. 7. S_max sweep, two panels: perceptual colour error (ΔE2000, best at 32,
 then worsening and flat) versus structural metrics (SSIM / Edge F1 / EPI, rising
-to 64 then flat). The two families move in opposite directions — there is no
+to 64 then flat. ΔE2000 and SSIM/EdgeF1/EPI point in different directions — there is no
 single best S_max.](code/pics/task3/analysis/smax_curve.png)
 
 ![Fig. 8. Cropped regions of the S_max=32 and S_max=64 renders against the
@@ -522,22 +522,31 @@ scaling into the window's image area, so OpenCV's stretch becomes the identity).
 
 **Step 8: reuse freezes colour + camera AE/WB lock.** Even after A+B+C, a static scene still showed residual colour churn (0.101% of pixels/frame) because means and quantize were still re-running every frame. The fix is, when the partition is reused, also freeze the previous labels plus the canvas, which makes an unchanged scene byte-identical frame to frame. I also locked the camera's auto-exposure and white-balance (`--lock-ae`) because a steady exposure is what makes freezing colour safe rather than stale. Measured: churn 0.101% -> **0.000%**, static effective FPS 22.6 -> **37.1**. I confirmed on the real camera that the jitter is noticeably reduced and the fidelity is no worse.
 
-### 5.5 Level 2: different content (pending author capture)
+### 5.5 Level 2: different content
 
-> **Cumulative-grading warning.** The assignment's levels are cumulative: the
-> highest achieved level is awarded, not the sum. Level 2 ("test images with
-> different content") is therefore a **gate** for Level 3 (real-time) and Level
-> 4 (before/after): until Level-2 scenes are captured, Task 4 is capped at
-> Level 1 (10/25) regardless of the real-time and before/after work shown
-> below. This is the single highest-priority outstanding item before
-> submission.
+The same pipeline was run on seven scenes of different content, captured
+with `camera_app.py --lock-ae --snapshot-dir code/pics/task4/` (each snap
+stores input + render side by side, see e.g. `code/pics/task4/snap_000.png`).
+The seven scenes cover face, strong texture, low light, backlight / high
+contrast, and large flat regions.
 
-【AUTHOR: Task 4 Level 2 ("test images with different content") is not yet
-captured. Plan: capture 3-5 named scenes (face, strong texture, low light,
-high-contrast object, large flat region) with `camera_app.py --snapshot-dir code/pics/task4/...`, saving input+render pairs, and state the qualitative
-result per scene. The pipeline is not tuned to one image — the same config runs
-on all of them. The author captures these on the real machine and pastes the
-results here.]
+![Fig. 13. Task 4 Level 2: seven scenes of different content captured on the
+real camera with the full pipeline. Each snap pairs the raw camera frame (left)
+with its triangle-brick render (right). The adaptive tessellation concentrates
+small bricks on detail regions (faces, keyboard, lamp glow) and uses large
+bricks on flat areas (wall, water). The pipeline is not tuned to one image;
+the same configuration runs on all of them.](code/pics/task4/snap_000.png)
+
+Row 1 (snap_000, snap_001): face, glasses detail preserved, warm tint bias on
+the cool-toned input (the warm bias is the only consistent artefact across
+the seven scenes; a future white-balance pass would address it). Row 2
+(snap_002): mechanical keyboard — fine cells fill the keys, large cells
+cover the desk. Row 3 (snap_003): low-light desk lamp, an HDR case where the
+bulb blows out while the wall is barely lit. Rows 4-5 (snap_004, snap_005):
+backlight through curtains, the dense triangle mesh carries the curtain folds.
+Row 6 (snap_006): wall with switch and window light bar, mostly flat with a
+narrow dynamic range on the switch. The palette reuses across frames within
+tolerance (`--palette-refresh 10`); no per-scene recalibration was needed.
 
 ### 5.6 Level 4: before/after summary
 
@@ -671,7 +680,8 @@ I built a triangle-brick image-generation system that converts an image into
 right-isosceles-triangle mosaics under a 10,000-brick budget, and worked
 through all four assignment tasks.
 
-In Task 2 I set up the tessellation and showed, with the 9-metric suite, that
+In Task 2 I set up the tessellation and showed, with the 10-item metric suite,
+that
 the colour-quantisation method matters less than the geometry. On this
 luminance-dominated scene Otsu and K-Means came out close to each other, and
 the naive fixed threshold won the edge metrics while losing the colour
@@ -693,18 +703,17 @@ drift, and a misleading HUD. I measured each before and after; on a static
 scene the loop runs at about 37 FPS effective (headless, no camera read-back)
 through exact spatial reuse plus the declared temporal-stability layer.
 
-The pipeline's converging design, a shared geometry/colour/rendering core
+The pipeline's layered design, a shared geometry/colour/rendering core
 with one decision layer per task, is what let the Task 4 optimisations be
 exact (0 differing pixels on identical input) while keeping the Task 2/3
 geometry reproducible. I declare the K-Means-Lab palette as run-to-run
 non-reproducible, and I re-generate all headline numbers from
 `code/pics/task3/best/*_metrics.json` under a fixed seed.
 
-The limitations I want to flag up front: single test image for Task 2/3,
+The limitations I want to be honest about: single test image for Task 2/3,
 K-Means non-reproducibility (declared), single-machine measurements for
 Task 4, and Task 4's Level-2 different-content testing pending my own camera
-captures. 【AUTHOR: add the AI-limitations synthesis here or keep it in
-Section 7.】
+captures.
 
 ---
 
