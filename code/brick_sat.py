@@ -10,17 +10,15 @@ for the sum of squared errors:
 
 That identity is what makes this useful here: the adaptive partitioners score
 every candidate cell by its SSE, so a per-candidate numpy pass over the region
-costs O(region) while a table lookup costs O(1). `brick_quadtree` is the reason
-this module exists -- it recomputed a region mean for every split candidate, which
-was 82% of a live camera frame.
+costs O(region) while a table lookup costs O(1). `brick_quadtree` uses this
+module for its candidate scoring.
 
-Why a separate module instead of reusing `brick_region_merge.rect_sse`
---------------------------------------------------------------
-That function is the same idea written inline before this module existed. It is
-deliberately left alone: every recorded Task 3 number comes from that code path,
-and unifying the two is a separate change that would have to be re-verified
-against the whole Task 3 sweep. So the duplication is documented rather than
-silently resolved, and this module is the version new code should use.
+Relationship to `brick_region_merge.rect_sse`
+---------------------------------------------
+That function computes the same quantity with its own inline tables and is left
+unchanged, so unifying the two is a separate change that would have to be
+re-verified against the recorded Task 3 sweep. This module is the version new
+code should use.
 
 Numerical caveat (real, and worth knowing before trusting the last digits)
 ------------------------------------------------------------------------
@@ -179,17 +177,14 @@ def rect_sobel_var(b, x, y, w, h):
 
 
 # ---------------------------------------------------------------------------
-# Batch forms -- these are what actually make the partitioners fast
+# Batch forms -- these are what the partitioners use on their hot paths
 # ---------------------------------------------------------------------------
-# Why the batch forms exist, since it is not obvious: the per-rectangle functions
-# above are O(1) in ARITHMETIC but not in NUMPY CALL OVERHEAD. Each one costs
-# about eight fancy-index operations, and a scalar result forces Python to
-# round-trip through numpy every time. The quadtree evaluates ~5 rectangles per
-# split candidate, so at 9990 triangles that is ~160000 tiny numpy calls, and
-# profiling showed the whole stage was dominated by that overhead rather than by
-# arithmetic -- which is why an O(1)-per-candidate rewrite was measured to be no
-# faster at all. The batch forms below do the same eight operations for a WHOLE
-# ARRAY of rectangles at once, which is where the speedup actually comes from.
+# Why the batch forms exist: the per-rectangle functions above are O(1) in
+# ARITHMETIC but not in NUMPY CALL OVERHEAD. Each costs about eight fancy-index
+# operations, and a scalar result forces a Python round-trip through numpy every
+# time. A scalar rewrite is therefore not automatically faster. The batch forms
+# below do the same eight operations for a WHOLE ARRAY of rectangles at once, so
+# the overhead is amortised over every candidate in one call.
 
 def rect_sse_total_many(b, xs, ys, ss):
     """`rect_sse_total` for many squares at once.

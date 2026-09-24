@@ -8,10 +8,14 @@ recomputed every frame from noisy camera pixels: near-tie split decisions flip
 
 `TemporalState` provides the geometry half of the fix (opt B): detect that the
 scene has not changed and reuse the previous partition, so no split decision is
-re-made. It also carries the per-triangle label memory that the sticky
-quantizer (opt C, `brick_color_rt.quantize_nearest_bgr_sticky`) needs, because
-that memory is only valid while the triangle rows are stable -- i.e. while the
-geometry is reused. A real scene change invalidates both.
+re-made. The scene test compares a mean-subtracted grey signature (so a uniform
+auto-exposure shift is not a scene change) plus two Lab chroma means (so a pure
+COLOUR change IS a scene change -- otherwise `freeze_colour_on_reuse` would
+hide it behind the cached canvas). It also carries the per-triangle label
+memory that the sticky quantizer (opt C,
+`brick_color_rt.quantize_nearest_bgr_sticky`) needs, because that memory is only
+valid while the triangle rows are stable -- i.e. while the geometry is reused. A
+real scene change invalidates both.
 
 This module holds ONLY the state and the decisions; `brick_pipeline.render_frame`
 does the actual partition/triangle work so there is no import cycle.
@@ -23,6 +27,12 @@ import numpy as np
 # of the 640x480 frame, which cuts sigma=2 sensor noise to ~0.2 grey levels
 # while a real content change moves the signature by whole grey levels.
 SIG_W, SIG_H = 64, 48
+# How many times each Lab chroma mean is repeated inside
+# `TemporalState.signature`. The structure block has SIG_H*SIG_W = 3072 entries;
+# repeating chroma a few hundred times gives a global colour cast enough weight
+# to cross `reuse_thresh`, while leaving the structure term in charge of
+# geometric change.
+CHROMA_REPEAT = 128.0
 
 
 class TemporalState:
@@ -85,29 +95,73 @@ class TemporalState:
 
     @staticmethod
     def signature(frame):
-        """Brightness-invariant scene signature of a frame.
+        """Scene signature of a frame: mean-subtracted structure + chroma.
 
-        Function: box-downsample to (SIG_H, SIG_W), convert to grey, and
-        subtract the spatial mean. Subtracting the mean is deliberate: the
-        quadtree's split priorities depend on relative contrast, so a uniform
-        auto-exposure shift should NOT count as a scene change. Uniform
-        brightness drift therefore leaves the geometry alone while the palette
-        (warm-started) tracks it.
+        Function
+        --------
+        Box-downsample to (SIG_H, SIG_W), convert to grey, and subtract the
+        spatial mean. Subtracting the mean is deliberate: the quadtree's split
+        priorities depend on relative contrast, so a uniform auto-exposure
+        shift should NOT count as a scene change, and the palette
+        (warm-started) tracks it instead.
 
-        Shape/semantics: (H,W,3) uint8 BGR in; (SIG_H,SIG_W) float32 out, each
-        entry a mean-subtracted average grey level of a ~10x10 block.
+        The grey channel alone cannot see a pure colour change: two frames with
+        identical structure but different colour cast produce the same
+        mean-subtracted grey signature, so with `freeze_colour_on_reuse` the
+        cached canvas would be returned and the colour change would never
+        appear. The Lab a/b means are appended for exactly that case. They are
+        kept as two scalars rather than a channel map because a global colour
+        cast moves them together, and a cast is the failure mode that matters;
+        localised hue edits are caught by the structure term.
+
+        Shapes
+        ------
+        Input:
+          frame : (H, W, 3) uint8 BGR.
+        Output:
+          sig : (SIG_H * SIG_W + 2,) float32. `[0 : SIG_H*SIG_W]` are
+                mean-subtracted average grey levels of ~10x10 blocks. The last
+                two entries are `CHROMA_REPEAT * (mean Lab a - 128)` and the
+                same for Lab b: scaled and repeated rather than raw means, so
+                that the single mean-absolute-difference comparison in
+                `can_reuse` gives chroma a meaningful share of the decision
+                instead of being diluted ~1500x by the structure block.
         """
         small = cv2.resize(frame, (SIG_W, SIG_H), interpolation=cv2.INTER_AREA)
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        return gray - gray.mean()
+        struct = gray - gray.mean()
+        lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB).astype(np.float32)
+        # The two chroma means are repeated CHROMA_REPEAT times so that, in the
+        # single mean-absolute-difference comparison against the SIG_H*SIG_W
+        # structure block, chroma carries a meaningful share of the decision.
+        # With only one entry each, a strong colour cast is diluted ~1000x by
+        # the structure block and slips under `reuse_thresh`. Centring on 128
+        # keeps the neutral point near zero, matching the mean-subtracted grey.
+        chroma = CHROMA_REPEAT * (lab[:, :, 1].mean() - 128.0)
+        chroma_b = CHROMA_REPEAT * (lab[:, :, 2].mean() - 128.0)
+        return np.concatenate([struct.ravel(),
+                               np.array([chroma, chroma_b], dtype=np.float32)])
 
     def can_reuse(self, frame):
         """Is this frame close enough to the cached partition to reuse it?
 
-        Shape/semantics: takes one (H,W,3) uint8 BGR frame; returns bool. False
-        when disabled, when nothing is cached, when the reuse-age guard trips,
-        or when the mean absolute signature difference exceeds
-        `reuse_thresh`. Side-effect free.
+        Function
+        --------
+        Compares the frame's signature against the cached one and reuses the
+        partition when the mean absolute difference stays under
+        `reuse_thresh`. The signature mixes structure and chroma (see
+        `signature`), so a pure colour change also breaks reuse; otherwise
+        `freeze_colour_on_reuse` would hide it behind a cached canvas.
+
+        Shapes
+        ------
+        Input:
+          frame : (H, W, 3) uint8 BGR.
+        Output:
+          bool — True when the partition may be reused. False when disabled,
+          when nothing is cached, when the frame shape changed, when the
+          reuse-age guard trips, or when the signature difference exceeds
+          `reuse_thresh`. Side-effect free.
         """
         if not self.enabled or self.leaves is None:
             return False

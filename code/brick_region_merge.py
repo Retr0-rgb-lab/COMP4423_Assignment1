@@ -18,9 +18,12 @@ def region_merge_partition(img, S_set, max_triangles=MAX_TRIANGLES):
     Function
     --------
     Start with all cells at S_min (densest) and greedily merge aligned 2x2
-    blocks of equal size — pick the merge that increases SSE the LEAST first
-    — until the triangle budget is met. Summed-area tables let us query
-    rect SSE in O(1) so candidate evaluation stays cheap across sizes.
+    blocks of equal size, always taking the merge that removes the MOST error
+    first: the heap key is the negative of the SSE reduction
+    (`-(sse_children - sse_parent) / 6`), so the largest reduction pops first
+    and the merge that costs the least error is never preferred. Summed-area
+    tables let us query rect SSE in O(1) so candidate evaluation stays cheap
+    across sizes.
 
     Candidates MUST be aligned to the `target_size` grid, otherwise merged
     cells land off-grid and can never form the next level's 2x2 blocks.
@@ -55,13 +58,10 @@ def region_merge_partition(img, S_set, max_triangles=MAX_TRIANGLES):
     a mosaic that violates it is the kind of failure that only shows up in the
     grader's count. Callers that hit this must widen `S_set` (e.g. include a
     larger S_max, or S_min=1) so the fully-merged grid fits.
-
-    History: this check was added after a review pass. Before it, a narrow S_set
-    such as [1, 2] on a large image returned over-budget leaves with no
-    exception or warning. No recorded Task 3 run was affected -- every one of
-    them lands at exactly 9990 triangles -- so the raise is a guard, not a
-    behaviour change for the shipped configurations.
     """
+    # Materialise once: `max` and `min` are both called below, so a one-shot
+    # iterator (a generator) would be exhausted by the first call.
+    S_set = list(S_set)
     padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
     Hp, Wp = padded.shape[:2]
@@ -101,7 +101,13 @@ def region_merge_partition(img, S_set, max_triangles=MAX_TRIANGLES):
         s1 = S1[y1, x1] - S1[y, x1] - S1[y1, x] + S1[y, x]
         s2 = S2[y1, x1] - S2[y, x1] - S2[y1, x] + S2[y, x]
         n = w * h
-        return s1, s2 - s1 * s1 / n
+        # `s2 - s1*s1/n` is mathematically >= 0 but can land a few ULPs below
+        # zero on a near-uniform region, where s2 and s1^2/n are large and nearly
+        # equal. A negative SSE is not a real quantity: it would flow into the
+        # merge cost below and make a flat block look better than it is, so the
+        # rounding artefact is clamped away.
+        sse = s2 - s1 * s1 / n
+        return s1, np.maximum(sse, 0.0)
 
     # Initial leaves: full S_min grid (single pixels have SSE = 0).
     leaves = {(j * S_min, i * S_min, S_min): np.zeros(3, dtype=np.float64)

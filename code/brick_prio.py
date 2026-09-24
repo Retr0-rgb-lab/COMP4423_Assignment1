@@ -1,12 +1,11 @@
 """
 brick_prio — precomputed split-priority maps for the quadtree (Task 4 opt B).
 
-Split out of `brick_quadtree.py` to keep that file under the 400-line limit
-(AGENTS 4.1). The functions here implement ONE responsibility: scoring every
-possible quadtree split candidate up front, so the greedy partition loop reads
-priorities out of plain Python lists instead of issuing a small numpy query per
-split. See `_priority_maps` for the bit-identity argument (exact-integer sums
-make any summation order identical to the summed-area-table path).
+The functions here implement ONE responsibility: scoring every possible quadtree
+split candidate up front, so the greedy partition loop reads priorities out of
+plain Python lists instead of issuing a small numpy query per split. See
+`priority_maps` for the bit-identity argument (exact-integer sums make any
+summation order identical to the summed-area-table path).
 """
 import numpy as np
 
@@ -18,12 +17,9 @@ def priority_maps(padded, S_set):
     --------
     A cell's split priority (delta-SSE per new triangle) depends only on the
     image region it covers, never on the current partition state -- the greedy
-    loop recomputes the same value every time. So instead of one small batched
-    SAT query per split (~4700 numpy calls per frame), score the entire
-    candidate universe here in a few LARGE batched calls (~log2(S_max) at
-    640x480), then let the loop read scalars out of plain Python lists. This is
-    what actually removes the per-split cost: the loop becomes heapq + list
-    indexing only.
+    loop would recompute the same value every time. So the entire candidate
+    universe is scored here in a few LARGE batched calls, then the loop reads
+    scalars out of plain Python lists and becomes heapq + list indexing only.
 
     The maps are built HIERARCHICALLY, not from summed-area tables: the size-2
     cell sums come straight from the image, and each larger size sums a 2x2

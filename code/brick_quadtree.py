@@ -8,11 +8,12 @@ Precomputed maps:   `brick_prio.priority_maps` / `prio_from_maps` (opt B).
 Three split-priority implementations (`impl=`):
   "sat"     — batched summed-area-table queries, one small batch per split
               (default; bit-identical to "ref" for the "mse" priority).
-  "ref"     — original per-candidate numpy region means (slow, for A/B only).
-  "precomp" — Task 4 optimization B: every candidate priority is a pure
-              function of the image, so the whole universe is scored up front
-              in a few batched calls and the greedy loop runs with zero numpy
-              calls. Bit-identical leaves to "sat" for "mse".
+  "ref"     — per-candidate numpy region means, retained as the correctness
+              reference for the A/B comparison.
+  "precomp" — every candidate priority is a pure function of the image, so the
+              whole universe is scored up front in a few batched calls and the
+              greedy loop runs with no per-split numpy queries. Bit-identical
+              leaves to "sat" for the "mse" priority; supports "mse" only.
 """
 import heapq
 import time
@@ -40,11 +41,17 @@ def _region_mse(region):
     ------
     Input:
       region : (h, w, C) or (h, w) ndarray — sub-image, dtype uint8 or float.
+               For the 3-D form C is treated as colour channels; for the 2-D
+               form the single scalar mean is taken over all h*w entries.
     Output:
-      float — sum over all pixels and channels of (pixel - mean)^2.
-              Larger value = the region is "more complex".
+      float — sum over all pixels and channels of (pixel - mean)^2, where
+              `mean` is one colour vector for the 3-D form and one scalar for
+              the 2-D form. Larger value = the region is "more complex".
     """
-    mean = region.reshape(-1, region.shape[-1]).mean(axis=0)
+    if region.ndim == 3:
+        mean = region.reshape(-1, region.shape[-1]).mean(axis=0)
+    else:
+        mean = region.mean()
     diff = region.astype(np.float32) - mean
     return float((diff * diff).sum())
 
@@ -55,14 +62,24 @@ def _region_sobel_var(region):
     Shapes
     ------
     Input:
-      region : (h, w, C) or (h, w) ndarray.
+      region : (h, w, 3) or (h, w, 4) ndarray (BGR / BGRA), or (h, w)
+               single-channel ndarray. A 3-D input with C not in {3, 4} cannot be
+               converted by `cv2.COLOR_BGR2GRAY` and is rejected.
     Output:
       float — variance of the Sobel magnitude on the grayscale version of
               `region`. Used as the priority signal for `priority="edgef1"`
               splits, where high-edge regions deserve to be subdivided first.
     """
     if region.ndim == 3:
-        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        if region.shape[2] == 3:
+            gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        elif region.shape[2] == 4:
+            gray = cv2.cvtColor(region, cv2.COLOR_BGRA2GRAY)
+        else:
+            raise ValueError(
+                f"region must have 3 or 4 channels for BGR conversion, got "
+                f"shape {region.shape}"
+            )
     else:
         gray = region
     s = filters.sobel(gray.astype(np.float64))
@@ -87,11 +104,9 @@ def _quadtree_priority(img, leaf, priority):
               further, which is how the quadtree terminates.
 
     Gotcha: `priority` is matched with `if priority == "edgef1" ... else mse`, so
-    an unrecognised string would select the mse branch silently -- a mislabelled
-    run would produce mse numbers reported under an edgef1 label, and the metrics
-    alone would not reveal it. `quadtree_partition` now rejects anything outside
-    {"mse", "edgef1"} up front, so this branch is only reachable with a valid
-    value; keep the entry-point check if a third mode is added here.
+    an unrecognised string would select the mse branch silently. `quadtree_partition`
+    validates `priority` up front against {"mse", "edgef1"}; keep that
+    entry-point check in sync if a third mode is added here.
     """
     x, y, size = leaf
     if size <= 1:
@@ -113,11 +128,11 @@ def _quadtree_priorities_sat(bundle, leaves, priority):
     Function
     --------
     Same decision rule as `_quadtree_priority`, but the table lookups are issued
-    for the whole batch at once. That batching is the entire point: the scalar
-    version is O(1) in arithmetic yet measured no faster than the original numpy
-    means, because the bottleneck was ~160000 tiny numpy calls, not the maths.
-    Doing one batch per split (4 children) and one for the seed (every S_max cell)
-    turns that into a few thousand numpy calls over arrays.
+    for the whole batch at once. The batching is the point: each scalar query
+    costs several numpy operations regardless of how little arithmetic it does,
+    so per-call overhead dominates unless the candidates are batched. Doing one
+    batch per split (4 children) and one for the seed (every S_max cell) turns
+    O(candidates) calls into O(splits) calls over arrays.
 
     Shapes/semantics: `leaves` is an iterable of `(x, y, size)` in padded
     coordinates; `priority` is "mse" or "edgef1". Returns a (N,) float64 array
@@ -180,17 +195,15 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
                      variance). Validated at the top; anything else raises.
       impl         : "sat" (default) answers the split priorities from the
                      summed-area tables in `brick_sat`, batched one query per
-                     split, so the cost stops scaling with region area rather than
-                     with numpy call count. "ref" keeps the original
-                     per-candidate numpy means and exists so the two can be
-                     measured against each other. "precomp" (Task 4) scores the
-                     whole candidate universe up front in a few large batched
-                     queries and runs the greedy heap loop with zero numpy calls;
+                     split. "ref" uses per-candidate numpy means and exists as
+                     the correctness reference. "precomp" scores the whole
+                     candidate universe up front in a few large batched queries
+                     and runs the greedy heap loop without per-split queries;
                      bit-identical to "sat" for "mse", and "mse" only.
-                     For the default "mse" priority the decision rule is
-                     numerically IDENTICAL across all three, so impl is a pure
-                     speed knob. For "edgef1" only "sat"/"ref" are valid: the
-                     precomputed maps carry no Sobel information.
+                     For the "mse" priority the decision rule is numerically
+                     IDENTICAL across all three, so `impl` is a pure speed knob.
+                     For "edgef1" only "sat"/"ref" are valid: the precomputed
+                     maps carry no Sobel information.
       return_padded: when True, also return the padded image as a 4th element,
                      so a caller that needs padded pixels for a later stage
                      (e.g. the live loop's mean extraction) does not pad twice.
@@ -226,18 +239,17 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
                          "(it precomputes delta-SSE maps; edgef1 needs the "
                          "Sobel tables -- use impl='sat' for edgef1).")
 
+    # Materialise once: `max` and `min` are both called below, so a one-shot
+    # iterator (a generator) would be exhausted by the first call.
+    S_set = list(S_set)
     padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
     Hp, Wp = padded.shape[:2]
     t0 = time.time()
 
     # `leaves` holds only MEMBERSHIP -- the set of cells that currently exist.
-    # It used to be a dict mapping cell -> its SSE, and that SSE was computed at
-    # seed time and again for every child on every split, then never read: the
-    # only uses are `len()`, iteration, `in`, and `list(leaves.keys())`. At 9990
-    # triangles that is 4 discarded region-SSE computations per split, on top of
-    # the 5 the priority function actually needs. Storing a value nobody reads was
-    # pure waste, so the container is now a set and the waste is gone.
+    # Priorities are computed on demand by `_quadtree_priority`; nothing reads a
+    # per-cell SSE back out of this container, so a set is the correct type.
     leaves = set()
     for i in range(Hp // S_max):
         for j in range(Wp // S_max):
@@ -261,12 +273,11 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
     # One of three implementations, all honouring the same batch contract
     # `prio_get(leaves) -> sequence of floats aligned with leaves`:
     if impl == "precomp":
-        # Task 4 optimization B: score the whole candidate universe up front
-        # (~log2(S_max) large batched reductions), then run the greedy loop
-        # with zero numpy calls. Values are bit-identical to the sat path (see
-        # brick_prio: exact-integer sums make any order identical), so the
-        # heap sees the same keys in the same order and the resulting leaves
-        # set is identical -- this is a pure speed change.
+        # Score the whole candidate universe up front (~log2(S_max) large
+        # batched reductions), then run the greedy loop with no per-split numpy
+        # queries. Values are bit-identical to the sat path (see brick_prio:
+        # exact-integer sums make any order identical), so the heap sees the same
+        # keys in the same order and the resulting leaves set is identical.
         _, prio_map = priority_maps(padded, S_set)
         pmap = {s: m.tolist() for s, m in prio_map.items()}
         print(f"    [qt] impl=precomp: "
@@ -284,10 +295,10 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
     elif impl == "sat":
         if priority == "edgef1":
             # The reference runs Sobel per region, which reflects at the region
-            # boundary; this runs it once globally. The values differ near region
-            # edges (measured: identical for "mse", median 2x relative difference
-            # for "edgef1"), so say so rather than let a number quietly change
-            # meaning. Recorded E_priority results came from the per-region form.
+            # boundary; this runs it once globally. The two agree for "mse" but
+            # differ near region edges for "edgef1", so the distinction is stated
+            # rather than left for a number to quietly change meaning. The E_priority
+            # experiment in docs/progress/Task3.md records which form it used.
             print("    [qt] note: edgef1 + impl=sat uses a GLOBAL Sobel map; "
                   "not numerically equal to the per-region reference")
         bundle = build_sats(padded, with_sobel=(priority == "edgef1"))
@@ -340,9 +351,8 @@ def quadtree_partition(img, S_set, max_triangles=MAX_TRIANGLES, priority="mse",
     print(f"    [qt] done: splits={iters}, n_tri={n_tri}, cells={len(leaves)} "
           f"({time.time()-t0:.2f}s)")
     if return_padded:
-        # Task 4 optimization D1: the caller (brick_pipeline.render_frame)
-        # needs the padded image for the means stage; handing it back removes
-        # the duplicate pad_to_max the live loop used to pay. Optional so the
+        # The caller (brick_pipeline.render_frame) needs the padded image for
+        # the means stage; handing it back avoids a second pad. Optional so the
         # Task 2/3 callers keep their 3-tuple contract untouched.
         return list(leaves), (Hp, Wp), orig_shape, padded
     return list(leaves), (Hp, Wp), orig_shape

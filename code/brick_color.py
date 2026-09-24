@@ -66,12 +66,8 @@ def _palette_by_luminance(labels, palette):
     dark->bright permutation of indices; `remap[old_index] = new_index` is its
     inverse, used to translate the labels. The RETURNED labels index into the
     RETURNED palette, not the input one.
-    Note: the BT.601 coefficients are duplicated from `_bt601_luma` rather than
-    reused (refactor candidate) -- if one definition changes, change both.
     """
-    lum = 0.114 * palette[:, 0].astype(np.float32) \
-        + 0.587 * palette[:, 1].astype(np.float32) \
-        + 0.299 * palette[:, 2].astype(np.float32)
+    lum = _bt601_luma(palette)
     order = np.argsort(lum)
     remap = np.zeros(len(palette), dtype=np.uint8)
     remap[order] = np.arange(len(palette), dtype=np.uint8)
@@ -189,19 +185,33 @@ def quantize_kmeans(means_bgr, k=3, seed=0):
     a red roof versus a grey road of the same brightness -- where a luma
     threshold cannot; the cost is 10 restarts and a local optimum that can
     differ between runs.
-    Shape: (T, 3) -> ((T,) uint8, (3, 3) uint8). Semantics: same contract as
-    `quantize_otsu` -- `labels[i]` is the palette index (0 darkest),
-    `palette[k]` the BGR centroid. `seed` is accepted but NOT used: cv2.kmeans
-    draws from OpenCV's global RNG, so reproducibility requires calling
-    `cv2.setRNGSeed()` at the call site, which task3_best does.
+    Shape: (T, 3) -> ((T,) uint8, (k_eff, 3) uint8) where `k_eff =
+    min(k, T)`. Semantics: same contract as `quantize_otsu` -- `labels[i]` is
+    the palette index (0 darkest), `palette[k]` the BGR centroid. The clamp on
+    k exists because OpenCV K-Means requires N >= K, so a small image that
+    yields fewer triangles than requested clusters would otherwise raise.
+    `seed` is accepted but NOT used: cv2.kmeans draws from OpenCV's global RNG,
+    so reproducibility requires calling `cv2.setRNGSeed()` at the call site,
+    which task3_best does.
     """
-    samples = means_bgr.astype(np.float32).reshape(-1, 3)
+    samples = np.ascontiguousarray(means_bgr, dtype=np.float32).reshape(-1, 3)
+    k_eff = max(1, min(int(k), samples.shape[0]))
+    if k_eff == 1:
+        # OpenCV's K-Means is degenerate for a single sample: it reports K
+        # labels for K=1 and returns a 1-element center array, so its output
+        # cannot be reshaped to (1, 3). One cluster has one obvious answer.
+        labels = np.zeros(samples.shape[0], dtype=np.uint8)
+        palette = np.clip(samples[:1], 0, 255).astype(np.uint8)
+        return _palette_by_luminance(labels, palette)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1.0)
     _, labels_col, centers = cv2.kmeans(
-        samples, k, None, criteria, 10, cv2.KMEANS_PP_CENTERS
+        samples, k_eff, None, criteria, 10, cv2.KMEANS_PP_CENTERS
     )
     labels = labels_col.flatten().astype(np.uint8)
-    palette = np.clip(centers, 0, 255).astype(np.uint8)
+    # OpenCV returns centers shaped (K, 1, 3) normally, but collapses to a flat
+    # (1, 3) array for some inputs, so normalise the row count before indexing.
+    centers_arr = np.asarray(centers, dtype=np.float32).reshape(-1, 3)
+    palette = np.clip(centers_arr, 0, 255).astype(np.uint8)
     return _palette_by_luminance(labels, palette)
 
 
@@ -274,7 +284,9 @@ def palette_median_cut(means_bgr, k):
     makes it robust to skewed distributions, and always choosing the widest box
     is what keeps coverage even. Deterministic, unlike K-Means -- which is why
     runs that must be reproducible use it (task3_smax_curve).
-    Shape: (T, 3) float -> (k', 3) uint8 BGR where `k' = min(k, distinct)`.
+    Shape: (T, 3) float -> (k, 3) uint8 BGR. The row count is ALWAYS k: if
+    splitting stalls early the palette is padded with repeated colours (see
+    Edge cases).
     Semantics: `arr` is (T, 3) float32 RGB; `boxes` is a list of (m, 3) arrays
     whose lengths always sum to T, so no colour is dropped or duplicated by the
     split loop. The output is NOT sorted by brightness.

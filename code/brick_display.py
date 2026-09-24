@@ -5,13 +5,12 @@ Presentation only: nothing here computes geometry or colour, it arranges the two
 images a viewer needs (the camera frame and the triangle-brick render) into one
 window and writes the on-screen statistics over them.
 
-Split out of `camera_app.py` on purpose. That driver was already at the 400-line
-limit (AGENTS 4.1), and the rule there is to split by responsibility rather than
-grow a file -- "driver stays thin" is the same rule this module serves.
-
-Three functions, plus the aspect-preserving window fit:
+Presentation helpers:
   * `make_side_by_side` -- the two-pane composite the window shows.
-  * `draw_hud`          -- a compact 3-line FPS/stage readout over a pane.
+  * `composite_size`    -- output shape for a given pair of pane shapes.
+  * `draw_hud`          -- a compact FPS/stage readout over a pane.
+  * `hud_lines`         -- the text rows `draw_hud` renders.
+  * `window_area`       -- content rect for a given window size.
   * `fit_letterbox`     -- scale the composite to a window WITHOUT stretching.
   * `window_closed`     -- did the user press the window's close button?
 """
@@ -19,8 +18,7 @@ import cv2
 import numpy as np
 
 # BGR colours. The HUD text is light and sits on a translucent dark panel, so it
-# stays readable over any mosaic without the heavy solid boxes the first version
-# used (which covered a large part of the frame).
+# stays readable over any mosaic while occupying little of the frame.
 HUD_BG = (24, 24, 24)
 HUD_FG = (235, 235, 235)
 HUD_ALPHA = 0.45          # panel opacity; 1.0 would be a solid box again
@@ -79,9 +77,8 @@ def make_side_by_side(original, render, gap=GAP, caption_h=CAPTION_H):
     pane, which is where the HUD must be drawn to sit over the render rather than
     straddling the separator.
 
-    Raises: nothing; a size mismatch would misalign the two panes silently, so
-    the caller is required to pass a matching pair (camera_app guarantees it by
-    passing the same resized frame it fed the pipeline).
+    Raises: ValueError when `original.shape != render.shape`. A size mismatch
+    would misalign the two panes, so it is rejected rather than tolerated.
     """
     if original.shape != render.shape:
         raise ValueError(
@@ -102,11 +99,11 @@ def make_side_by_side(original, render, gap=GAP, caption_h=CAPTION_H):
 def hud_lines(fps, info, cfg, paused, timer):
     """The three compact HUD lines (kept separate so they can be measured).
 
-    Function: condenses what the first HUD version spread over 14 lines into
-    three -- one status line, one timing line, one key-help line -- because the
-    HUD should not cover the picture. The per-size histogram and the full config
-    are dropped here on purpose: they are still in the exit summary, which is
-    where anyone reading numbers should look, not the live overlay.
+    Function: returns three lines -- one status line, one timing line, one
+    key-help line -- because the HUD should not cover the picture. The per-size
+    histogram and the full config are omitted here on purpose: they are still in
+    the exit summary, which is where anyone reading numbers should look, not the
+    live overlay.
 
     Shape/semantics: returns `list[str]`. `fps` is the caller's rolling FPS;
     `info` supplies `n_tri`, `reused`, `render_reused` (see brick_pipeline);
@@ -135,8 +132,7 @@ def draw_hud(canvas, fps, info, cfg, paused, timer, x0=0):
     The HUD is how a real-time claim is verified on screen instead of asserted:
     it shows the measured FPS *and* the median cost of each stage. It is drawn
     as three small lines on ONE translucent panel (a local `addWeighted` over
-    the panel ROI only), not the original stack of solid black boxes, so it no
-    longer covers a large part of the frame.
+    the panel ROI only), so it occupies little of the frame.
 
     Shape
     -----

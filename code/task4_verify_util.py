@@ -1,10 +1,9 @@
 """
 task4_verify_util -- shared helpers for the Task 4 verification harness.
 
-Split out of `task4_verify.py` to keep that file under the 400-line limit
-(AGENTS 4.1): these four are generic test utilities (a synthetic frame source,
-a quality metric pair, a paired timer, a perceptual churn measure) with no
-knowledge of any particular optimization, so they belong to no single check.
+These are generic test utilities (a synthetic frame source, a quality metric
+pair, a paired timer, a perceptual churn measure) with no knowledge of any
+particular optimization, so they belong to no single check.
 
 All functions are deterministic and headless -- no camera, no window.
 """
@@ -57,10 +56,10 @@ def quality_pair(src, canvas):
 def best_of(fn, reps):
     """Median-of-reps wall time in ms for a zero-arg callable (paired timing).
 
-    Semantics: returns (best_ms, median_ms). Best is the headline for stage
-    benchmarks (matches the Task 4 convention of quoting best-of-N for paired
-    in-process runs); median is printed alongside so a bimodal cost cannot
-    hide.
+    Semantics: returns `(best_ms, median_ms)` for `reps` in-process calls of
+    `fn`. `best` is the headline for stage benchmarks because it is the least
+    contaminated by scheduler noise; `median` is returned alongside so a
+    bimodal cost cannot hide.
     """
     ts = []
     for _ in range(reps):

@@ -112,12 +112,12 @@ def make_residual_panel(heatmaps, names):
 def make_metrics_bar_chart(metrics_by_method):
     """Two-panel bar chart for the Task 2 three-method comparison.
 
-    Function: the metrics have incompatible scales and directions, so they are
-    split into two panels rather than one -- left: the bounded [0, 1] metrics
-    where HIGHER is better (comparable on a shared 0..1.05 axis); right: the
-    unbounded metrics where LOWER is better (each bar labelled with its value).
-    Putting them on one axis would make PSNR's ~17 dB dwarf SSIM's 0.4 and hide
-    the comparison this chart exists to make.
+    Function: the metrics have incompatible scales, so they are split into two
+    panels rather than one -- left: the bounded [0, 1] metrics where HIGHER is
+    better (comparable on a shared 0..1.05 axis); right: the absolute-scale
+    metrics, each bar labelled with its value. Note the right panel mixes
+    directions: PSNR is HIGHER-is-better, while Delta_E_2000 and Quant_Error are
+    LOWER-is-better, so a shorter bar is better for two of the three.
 
     Shape: returns a matplotlib `Figure` with axes (1, 2), figsize (13, 5). The
     function does NOT save or close -- the caller owns that, so the same figure
@@ -131,7 +131,8 @@ def make_metrics_bar_chart(metrics_by_method):
     Preconditions / gotchas:
       * Panel-left assumes all four `higher` keys are already in [0, 1]; EPI can
         be NEGATIVE in principle (it is a correlation), which would render below
-        the axis floor. On the images tested so far it is positive.
+        the axis floor. The panel's y-limit is fixed at 0..1.05, so a negative
+        EPI is drawn outside the visible range rather than raising.
       * `METHOD_COLORS` must contain every method name in `metrics_by_method` or
         this raises KeyError -- intentional, so a new method cannot be plotted
         in a colour that clashes with an existing series.
@@ -139,6 +140,9 @@ def make_metrics_bar_chart(metrics_by_method):
         rather than a blank bar.
     """
     higher = ["SSIM", "MS-SSIM", "Edge_F1", "EPI"]
+    # Mixed direction on purpose: PSNR is higher-is-better, the two error
+    # metrics are lower-is-better. Each bar is value-labelled so the reader
+    # never has to infer direction from bar height.
     lower = [("PSNR", "PSNR (dB)"), ("Delta_E_2000", "ΔE2000"),
              ("Quant_Error", "Quant Error (ΔE)")]
     methods = list(metrics_by_method.keys())
@@ -185,10 +189,10 @@ def make_sweep_bar_chart(metrics_list, title="Task 3 experiment grid"):
     """Two-panel bar chart across N Task 3 experiment runs.
 
     Function: same two-panel split as `make_metrics_bar_chart` (bounded
-    higher-is-better on the left, unbounded lower-is-better on the right), but
-    across RUNS instead of across methods -- used for the Task 3 summary so all
-    15 configurations can be eyeballed on one figure. Bar width shrinks as
-    `0.8/n` so every run gets a slot, and the figure widens with `n`.
+    higher-is-better on the left, absolute-scale mixed-direction metrics on the
+    right), but across RUNS instead of across methods -- used for the Task 3
+    summary so all 15 configurations can be eyeballed on one figure. Bar width
+    shrinks as `0.8/n` so every run gets a slot, and the figure widens with `n`.
 
     Shape: returns a matplotlib `Figure` with axes (1, 2),
     figsize `(max(12, n*0.6), 5)`. Not saved or closed here -- the caller does.

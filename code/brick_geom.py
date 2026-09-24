@@ -15,8 +15,10 @@ Everything here is pure geometry; no colour, rendering, metrics, or I/O.
 
 A "leaf cell" throughout this module is the tuple `(x, y, size)` where:
   x, y   : integer top-left of a square in the PADDED image coordinates.
-  size   : integer side length in pixels (always a power of 2 in
-           {S_min, 2*S_min, ..., S_max} when used with quadtree/region-merge).
+  size   : integer side length in pixels. With the quadtree this is always a
+           power of 2 in {S_min, 2*S_min, ..., S_max}; region-merge only
+           requires the size RATIO between consecutive entries to double, so
+           an S_min of 3 yields cells of 3, 6, 12, 24.
 
 A "triangle" returned to the renderer is a `(3, 2)` int32 ndarray of three
 OpenCV-style points: `[..., 0]=x (column)`, `[..., 1]=y (row)`.
@@ -33,10 +35,12 @@ alternates on the checkerboard parity of the cell index:
 Two consequences that are easy to get wrong when reading the 2-triangle
 list, so they are stated once here instead of in each function:
 
-  * Neighbouring cells -- horizontally or vertically adjacent -- get
-    OPPOSITE directions, because their parity flips. The shared vertices
+  * Same-size neighbouring cells -- horizontally or vertically adjacent --
+    get OPPOSTE directions, because their parity flips. The shared vertices
     make the diagonals chain up into a chevron / herringbone texture. They
-    do NOT form uniform stripes.
+    do NOT form uniform stripes. Across a size change the parity is computed
+    from each cell's own `size`, so the alternation is only guaranteed within
+    one size class.
   * The alternation is deliberate: one global diagonal direction would make
     every boundary line parallel and bias the mosaic toward a single
     diagonal, which is visible as a directional smear on diagonal edges.
@@ -239,8 +243,10 @@ def leaves_to_triangles_array(leaves):
     Intermediate: per (size, parity) bucket with n cells, `orig` is (n, 1, 2)
     origins and `off` a (3, 2) offset block; the sum broadcasts to (n, 3, 2).
     Output: (2*len(leaves), 3, 2) int32 — `out[t, v, 0]=x (column)`,
-            `out[t, v, 1]=y (row)` for vertex v of triangle t, same content as
-            `np.stack(leaves_to_triangles(leaves))`.
+            `out[t, v, 1]=y (row)` for vertex v of triangle t. For non-empty
+            `leaves` this has the same content as
+            `np.stack(leaves_to_triangles(leaves))`; for empty input it returns
+            `(0, 3, 2)`, where `np.stack([])` would raise.
     """
     leaves = list(leaves)
     out = np.empty((2 * len(leaves), 3, 2), dtype=np.int32)

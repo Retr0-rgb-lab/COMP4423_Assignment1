@@ -1,10 +1,8 @@
 """
 brick_color_rt -- temporal colour helpers for the live loop (Task 4 opt A+C).
 
-New module rather than additions to `brick_color.py` for two reasons: that file
-is already near the 400-line limit (AGENTS 4.1), and every recorded Task 2/3
-result depends on it, so its code path stays byte-identical. The functions here
-mirror the colour-space conventions documented in `brick_color`:
+The functions here mirror the colour-space conventions documented in
+`brick_color`:
 
   CLUSTERING  Lab for the warm-start k-means (perceptually uniform), RGB when
               asked; ASSIGNMENT is always plain BGR Euclidean, exactly as in
@@ -15,10 +13,9 @@ mirror the colour-space conventions documented in `brick_color`:
 
 Two temporal-stability primitives:
   * `palette_kmeans_warm` -- one k-means pass SEEDED with the previous
-    palette's assignment (`cv2.KMEANS_USE_INITIAL_LABELS`). A rebuild then
-    refines the previous local optimum instead of jumping to a different one,
-    which is what removed the measured 76%-of-pixels palette flash
-    (docs/progress/Task4.md, step 5).
+    palette's assignment (`cv2.KMEANS_USE_INITIAL_LABELS`), so a rebuild
+    refines the previous local optimum instead of jumping to a different one
+    and losing palette-entry correspondence.
   * `quantize_nearest_bgr_sticky` -- nearest-palette assignment with a
     dead-band: a triangle keeps its previous label unless another entry is
     better by a relative margin, which stops boundary flapping on static
@@ -78,9 +75,8 @@ def palette_kmeans_warm(means_bgr, k, prev_palette_bgr, space="lab"):
     --------
     A normal `cv2.kmeans` run re-draws its initial centroids from OpenCV's
     global RNG and takes the best of several restarts, so two runs on nearly
-    identical data can land in completely different local optima -- the measured
-    cause of the 76%-of-pixels palette jump (step 5 analysis). This version
-    seeds the one allowed pass with the assignment of the previous palette
+    identical data can land in different local optima. This version seeds the
+    one allowed pass with the assignment of the previous palette
     (`KMEANS_USE_INITIAL_LABELS`), so the result is a refinement of the previous
     solution. Because the initial labels tie every sample to a previous
     centroid, palette-entry correspondence is preserved too: entry k stays
@@ -96,14 +92,23 @@ def palette_kmeans_warm(means_bgr, k, prev_palette_bgr, space="lab"):
     """
     means_in = _mean_space(means_bgr, space)
     prev_in = _palette_space(prev_palette_bgr, space)
-    # Initial partition: each sample to its nearest previous centroid. This is
-    # exactly what quantize_nearest_bgr does, only in the clustering space.
+    # OpenCV K-Means requires N >= K, so a frame that yields fewer triangles
+    # than palette entries has to shrink the request. The initial partition
+    # must also stay inside the new K, hence re-mapping any label that pointed
+    # at a dropped centroid.
+    k_eff = max(1, min(int(k), means_in.shape[0], prev_in.shape[0]))
+    prev_in = prev_in[:k_eff]
+    if k_eff == 1:
+        # OpenCV collapses its center array to a single scalar for K=1, so the
+        # one-cluster answer is computed directly from the sample mean instead.
+        mean_bgr = means_in.mean(axis=0, keepdims=True)
+        return _centers_to_bgr(mean_bgr, space)
     d = ((means_in[:, None, :] - prev_in[None, :, :]) ** 2).sum(axis=2)
     init = np.argmin(d, axis=1).astype(np.int32).reshape(-1, 1)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1.0)
     # attempts=1 is required with KMEANS_USE_INITIAL_LABELS: the whole point is
     # NOT to try random alternatives.
-    _, _, centers = cv2.kmeans(means_in, int(k), init, criteria, 1,
+    _, _, centers = cv2.kmeans(means_in, k_eff, init, criteria, 1,
                                cv2.KMEANS_USE_INITIAL_LABELS)
     return _centers_to_bgr(centers, space)
 
@@ -114,10 +119,9 @@ def quantize_nearest_bgr_sticky(means_bgr, palette_bgr, prev_labels, margin=0.1)
     Function
     --------
     Plain `quantize_nearest_bgr` re-argmins every frame, so a triangle whose
-    colour sits near a palette boundary flips labels on tiny sensor noise --
-    the measured ~3%-of-cells-per-frame flap. Here a triangle KEEPS its
-    previous label unless the newly-best entry is better by a relative margin
-    on the squared-distance ratio:
+    colour sits near a palette boundary flips labels on tiny sensor noise.
+    Here a triangle KEEPS its previous label unless the newly-best entry is
+    better by a relative margin on the squared-distance ratio:
 
         switch  <=>  d_new_best < d_prev * (1 - margin)
 

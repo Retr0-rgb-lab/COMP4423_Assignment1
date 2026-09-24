@@ -5,13 +5,16 @@ PDF requirement: "Call the camera to capture images and display them."
 
 The script opens the default camera with `cv2.VideoCapture`, grabs one frame,
 shows it, and waits for a key before closing. If no camera can be opened it
-falls back to reading a file (`pics/SKY.png` by default) so the display path
+falls back to reading a file (`pics/sky.jpg` by default) so the display path
 can still be demonstrated on a machine without a webcam.
 
 Run on the real desktop, not headless:
 
     ..\\..\\venv\\Scripts\\python code\\capture.py
     ..\\..\\venv\\Scripts\\python code\\capture.py --from-file code\\pics\\sky.jpg
+
+On a headless host pass `--no-show`; `cv2.waitKey` would otherwise block
+forever with no window to press a key in.
 """
 import argparse
 import os
@@ -53,22 +56,28 @@ def grab_from_camera(camera_index=0):
         cap.release()
 
 
-def show_and_wait(frame, title="Task 1"):
-    """Display `frame` in a window and block until any key is pressed.
+def show_and_wait(frame, title="Task 1", show=True):
+    """Display `frame` and block for a key, or skip the GUI entirely.
 
     Function
     --------
     Thin wrapper around `cv2.imshow` / `cv2.waitKey(0)` /
-    `cv2.destroyAllWindows` so both the camera and file paths exit the same way.
+    `cv2.destroyAllWindows` so both the camera and file paths exit the same
+    way. When `show` is False the image is validated but no window is opened,
+    which is what a headless host (WSL, CI, SSH) needs: `cv2.waitKey(0)` would
+    otherwise block forever because no key can ever arrive.
 
     Shapes
     ------
     Input:
-      frame : (H, W, 3) uint8 BGR, the image to show.
-      title : str — window title.
-    Output: None. Blocks on `waitKey(0)`, which requires the window to have
-    focus; on a headless host it appears to hang rather than fail.
+      frame : (H, W, 3) uint8 BGR, the image to show; `[y, x, c]` is a BGR
+              channel value.
+      title : str, window title, used only when `show` is True.
+      show  : bool, False to run the capture without any GUI call.
+    Output: None.
     """
+    if not show:
+        return
     cv2.imshow(title, frame)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
@@ -87,8 +96,9 @@ def main():
     Shapes
     ------
     Input: CLI arguments only, via argparse (`--camera-index`, `--from-file`,
-    `--file`). Output: one (H, W, 3) uint8 BGR frame handed to `show_and_wait`;
-    no array is returned. Semantics: `frame[y, x, c]` is a BGR channel value.
+    `--file`, `--no-show`). Output: one (H, W, 3) uint8 BGR frame handed to
+    `show_and_wait`; no array is returned. Semantics: `frame[y, x, c]` is a BGR
+    channel value.
 
     Raises
     ------
@@ -104,6 +114,9 @@ def main():
     ap.add_argument("--file", default=DEFAULT_FILE,
                     help="fallback file when no camera is available "
                          f"(default: {DEFAULT_FILE})")
+    ap.add_argument("--no-show", action="store_true",
+                    help="capture and report the frame without opening a window "
+                         "(required on a headless host)")
     args = ap.parse_args()
 
     frame = None
@@ -125,7 +138,7 @@ def main():
         source = path
 
     print(f"[task1] source = {source}  shape = {frame.shape}  dtype = {frame.dtype}")
-    show_and_wait(frame)
+    show_and_wait(frame, show=not args.no_show)
 
 
 if __name__ == "__main__":

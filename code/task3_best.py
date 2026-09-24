@@ -1,26 +1,18 @@
 """
-Task 3: THE chosen best configuration + comparison renders.
+Task 3: render the BEST configuration and its comparison runs.
 
-Chosen configuration (balanced, not pure-ΔE):
+Configuration under test (the balanced pick, not the lowest-Delta-E run):
+partition=quadtree, S_set=[1,2,4,8,16,32], K=16, priority=mse,
+palette=kmeans_lab, budget=9990 triangles. `cv2.setRNGSeed(0)` makes the
+K-Means palette reproducible.
 
-    partition = quadtree          balanced: near-best ΔE with much better
-                                  structure than region_merge (which merges
-                                  away all fine cells)
-    S_max     = 32                best perceptual colour (B2_smax sweep)
-    S_min     = 1                 quadtree can reach fine cells where needed
-    K         = 16                best ΔE2000 + quant error (A_ksweep)
-    priority  = mse (ΔMSE / 6)    beats Sobel priority (E_priority)
-    palette   = kmeans_lab        better ΔE than median_cut (D_palette)
+The rationale for choosing these values, and the metrics behind the choice, are
+recorded in `docs/progress/Task3.md`. This driver only renders.
 
-cv2.setRNGSeed(0) makes the K-Means palette reproducible.
-
-Why quadtree over region_merge (which had the single lowest ΔE, 8.63):
-    region_merge collapses all cells to size {16, 32} — it drops every fine
-    cell, so Edge F1 / EPI are the worst of the grid (0.298 / +0.015).
-    quadtree keeps a {4, 8, 16, 32} mix: ΔE 9.03 (only 0.4 worse) but
-    Edge F1 0.339 and EPI +0.047 (much better structure).
-
-Output: code/pics/task3/best/best_config.png + best_compare.png
+Outputs (all under `code/pics/task3/best/`):
+  * `<name>.png`         -- the render for each run in BEST + OTHERS
+  * `<name>_metrics.json` -- the compute_metrics dict for that run
+  * `best_compare.png`   -- the BEST render beside the comparison runs
 """
 import json
 import os
@@ -42,10 +34,10 @@ DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics",
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "task3", "best")
 BUDGET = 9990
 
-# The chosen configuration.
+# (name, partition, S_set, K, palette_method)
 BEST = ("quadtree_smax32_k16_lab", "quadtree", [1, 2, 4, 8, 16, 32], 16, "kmeans_lab")
 
-# Kept for the comparison figure (region_merge had lower ΔE but worse structure).
+# Additional runs rendered for side-by-side comparison against BEST.
 OTHERS = [
     ("region_merge_smax32_k16_lab", "region_merge", [4, 8, 16, 32], 16, "kmeans_lab"),
     ("region_merge_smax32_k16_median", "region_merge", [4, 8, 16, 32], 16, "median_cut"),
@@ -83,12 +75,20 @@ def run(img, partition, s_set, k, palette_method):
     Side effect: this function does NOT seed the RNG -- `main` calls
     `cv2.setRNGSeed(0)` before each invocation, deliberately, so the seeding
     sits next to the loop that needs it.
+
+    Raises: ValueError when `partition` is neither "quadtree" nor
+    "region_merge", so a typo cannot silently run region-merge under the label
+    of the requested algorithm.
     """
     t0 = time.time()
     if partition == "quadtree":
         leaves, ps, osz = quadtree_partition(img, s_set, BUDGET, "mse")
-    else:
+    elif partition == "region_merge":
         leaves, ps, osz = region_merge_partition(img, s_set, BUDGET)
+    else:
+        raise ValueError(
+            f"Unknown partition {partition!r}; expected 'quadtree' or "
+            f"'region_merge'")
     tris = leaves_to_triangles(leaves)
     padded, _, _ = pad_to_max(img, max(s_set))
     means = triangle_means_bgr(padded, tris)
@@ -114,8 +114,7 @@ def report(name, m, sizes):
     Shape: no arrays. Semantics: `m` is a `compute_metrics` dict and is read for
     N_Triangles / SSIM / PSNR / Delta_E_2000 / Edge_F1 / EPI only; `sizes` maps
     cell side -> cell count and is printed sorted ascending, so the printed
-    `sizes=` shows the final size MIX, which is the evidence for the
-    quadtree-vs-region_merge argument in the module docstring.
+    `sizes=` shows the final size mix.
     """
     print(f"{name:32s} n_tri={m['N_Triangles']:.0f} "
           f"SSIM={m['SSIM']:.4f} PSNR={m['PSNR']:.2f} "
@@ -133,15 +132,14 @@ def main():
 
     Shapes: input image is (H, W, 3) uint8 BGR; the compare grid is
     `(2*(H+40) + 3*16, 2*W + 3*16, 3)` uint8 BGR. Semantics: the grid's caption
-    per tile prints the run name plus Delta_E_2000 / SSIM / Edge_F1, which are
-    the three numbers the report's "why quadtree" argument rests on.
+    per tile prints the run name plus Delta_E_2000 / SSIM / Edge_F1.
 
     Timing note: the FPS recorded for each run comes from `run`'s own `t0`
     (partition + means + palette + render; metrics excluded), same caveat as the
     other drivers -- see the FPS caveat in brick_metrics.
 
-    Outputs: `best_config.png` (the chosen render alone, the canonical artifact),
-    one `<name>.png` per config, and `best_compare.png`.
+    Outputs: `best_config.png` (the BEST render alone), one `<name>.png` and one
+    `<name>_metrics.json` per config, and `best_compare.png`.
     """
     os.makedirs(OUT_DIR, exist_ok=True)
     img = cv2.imread(DEFAULT_INPUT)
@@ -154,10 +152,8 @@ def main():
         report(name, m, sizes)
         results.append((name, canvas, m, sizes))
         cv2.imwrite(os.path.join(OUT_DIR, f"{name}.png"), canvas)
-        # Persist the metrics so the report's quoted numbers (e.g. the
-        # region_merge dE=8.63 headline in the module docstring) trace back to a
-        # product file, not just prose. "Heatmap" is a ndarray and is dropped,
-        # matching triangle_brick_task3's on-disk JSON format.
+        # Persist the metrics as a product file. "Heatmap" is an ndarray and is
+        # dropped, matching triangle_brick_task3's on-disk JSON format.
         metrics_to_dump = {k: v for k, v in m.items() if k != "Heatmap"}
         with open(os.path.join(OUT_DIR, f"{name}_metrics.json"), "w") as f:
             json.dump({k: (v if not isinstance(v, np.ndarray) else v.tolist())

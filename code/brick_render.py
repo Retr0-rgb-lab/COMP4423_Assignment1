@@ -115,8 +115,8 @@ def render_triangles_batched(canvas_shape, triangles, labels, palette_bgr,
     `cv2.fillPoly` paints ANY number of same-colour polygons per call, so the
     whole fill pass is <=K calls instead of one call per triangle. The border
     colour is constant, so ONE `cv2.polylines` call draws every outline. This
-    removes the per-triangle Python->cv2 crossing cost (~20000 calls per frame
-    at 9990 triangles), which was ~25% of the live frame.
+    removes the per-triangle Python->cv2 crossing cost, which is O(T) crossings
+    in the reference renderer.
 
     Order note (why the output is not byte-identical to `render_triangles`):
     fills now run colour-group by colour-group instead of triangle by
@@ -147,14 +147,15 @@ def render_triangles_batched(canvas_shape, triangles, labels, palette_bgr,
       canvas       : (H, W, 3) uint8 BGR, cropped to orig_shape when given;
                      border drawn ON TOP exactly like `render_triangles`.
 
-    Raises: ValueError if `triangles` is not a (T, 3, 2) ndarray — the batched
-    path is defined for the vectorised geometry only; callers holding a list of
-    per-triangle arrays use `render_triangles`.
+    Raises: ValueError unless the CONVERTED `triangles` array has shape
+    (T, 3, 2). `np.asarray` is applied first, so a list of per-triangle (3, 2)
+    arrays is accepted; only a shape that is not (T, 3, 2) after conversion is
+    rejected.
     """
     tri = np.asarray(triangles)
     if tri.ndim != 3 or tri.shape[1:] != (3, 2):
         raise ValueError(
-            f"triangles must be a (T, 3, 2) ndarray, got shape {triangles.shape}")
+            f"triangles must convert to a (T, 3, 2) array, got shape {tri.shape}")
 
     H, W = canvas_shape
     canvas = np.zeros((H, W, 3), dtype=np.uint8)

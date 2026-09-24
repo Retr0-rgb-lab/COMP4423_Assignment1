@@ -1,9 +1,6 @@
 """
 Task 3 marginal-benefit analysis (rate-distortion).
 
-Answers: "as we allow more triangles, when does splitting a cell into 4
-children stop paying off, and which cell sizes actually contribute?"
-
 Method:
     1. Run the quadtree greedily, recording each split's marginal benefit
        ΔSSE/6 (SSE reduction per new triangle) and the parent cell size.
@@ -11,8 +8,6 @@ Method:
         (a) marginal benefit vs split index  (the sorted priority curve)
         (b) cumulative SSE reduction vs triangles used
         (c) mean marginal benefit grouped by parent cell size
-    3. Also evaluate the full pipeline (render + metrics) at several budgets
-       to get a ground-truth quality-vs-rate curve.
 
 Outputs to code/pics/task3/analysis/.
 """
@@ -28,7 +23,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from brick_geom import pad_to_max  # noqa
-from brick_quadtree import _region_mse  # noqa
+from brick_quadtree import _region_mse, quadtree_partition  # noqa
 
 DEFAULT_INPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "sky.jpg")
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pics", "task3", "analysis")
@@ -40,13 +35,11 @@ def quadtree_with_history(img, S_set, max_triangles):
     Function
     --------
     Same greedy rule as `brick_quadtree.quadtree_partition` -- split the highest
-    ΔSSE/6 leaf first -- but it also APPENDS one history row per split. That is
-    the whole point of this copy: the production partitioner throws the
-    rate-distortion trace away, and this analysis needs the trace to answer "how
-    much does the next triangle buy us?". Deliberately duplicated rather than
-    refactored so the shipped partitioner keeps its hot inner loop clean; if the
-    priority rule changes in `brick_quadtree`, this copy must be updated by hand
-    or the two curves stop describing the shipped algorithm.
+    ΔSSE/6 leaf first -- but it also APPENDS one history row per split, which the
+    production partitioner discards. Because that duplicates the shipped greedy
+    loop, `main` asserts below that this copy's final leaf set equals
+    `quadtree_partition`'s on the same input and budget, so the two cannot
+    silently diverge.
 
     Stops when the next split would exceed `max_triangles` (a split adds 6
     triangles) or the heap empties.
@@ -71,6 +64,7 @@ def quadtree_with_history(img, S_set, max_triangles):
         start_tri  : int -- triangles in the initial coarse grid.
         leaves_keys: list of (x, y, size) -- final cells.
     """
+    S_set = list(S_set)
     padded, orig_shape, _ = pad_to_max(img, max(S_set))
     S_max, S_min = max(S_set), min(S_set)
     Hp, Wp = padded.shape[:2]
@@ -154,11 +148,14 @@ def main():
     not +0. All three figures are drawn against `tri_used`.
 
     Why BIG=60000: the assignment budget is 9990, but the curves only become
-    informative when allowed to run well past it -- the point of the analysis is
-    where benefit STOPS being worth a triangle, which is not visible if the curve
-    is truncated at the budget. Consequently the x-axis extends beyond 9990 and
-    the 9990 line is an annotation, not a cutoff. Do NOT read anything past the
-    line as achievable under the assignment's <10000 constraint.
+    informative when allowed to run well past it. Consequently the x-axis
+    extends beyond 9990 and the 9990 line is an annotation, not a cutoff. Do
+    NOT read anything past the line as achievable under the assignment's
+    <10000 constraint.
+
+    Also asserts that this instrumented copy agrees with the shipped
+    `brick_quadtree.quadtree_partition` on the same budget, so the duplicated
+    greedy loop cannot drift away from the algorithm it is measuring.
 
     Writes into `pics/task3/analysis/`; returns None (side-effecting).
     """
@@ -170,6 +167,16 @@ def main():
     S_set = [1, 2, 4, 8, 16, 32, 64]
     BIG = 60000  # large budget so we see the full benefit curve
     history, start_tri, leaves = quadtree_with_history(img, S_set, BIG)
+
+    # Guard the duplication: the instrumented copy must reproduce the shipped
+    # partitioner exactly at the assignment budget.
+    ref_leaves, _, _ = quadtree_partition(img, S_set, 9990, "mse", impl="precomp")
+    _hist, _st, copy_leaves = quadtree_with_history(img, S_set, 9990)
+    assert sorted(copy_leaves) == sorted(ref_leaves), (
+        "task3_marginal's quadtree copy diverged from brick_quadtree"
+    )
+    print(f"[marginal] equivalence vs brick_quadtree at budget 9990: OK "
+          f"({len(ref_leaves)} cells)")
     sizes = np.array([h[0] for h in history])
     marg = np.array([h[1] for h in history])          # ΔSSE / 6
     dsse = np.array([h[2] for h in history])          # ΔSSE

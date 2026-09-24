@@ -1,23 +1,23 @@
 """
 brick_means_rows -- exact per-triangle means via row-run prefix sums (Task 4).
 
-Why this exists
----------------
 `brick_means.means_by_masks` ("fast") walks every pixel of each half-mask as an
-OFFSET and issues one vectorised gather per offset, so a 640x480 frame costs
-~sum(s^2/2) ~ 2730 tiny numpy calls. Inside a cell, though, each triangle half
-is a CONTIGUOUS run of pixels on every row, so a per-row prefix-sum table
-answers one row's run in two lookups. This module does that: the call count
-drops to ~sum(2s) (a few hundred), with the same pixel set and the same result.
+OFFSET and issues one vectorised gather per offset. Inside a cell, though, each
+triangle half is a CONTIGUOUS run of pixels on every row, so a per-row
+prefix-sum table answers one row's run in two lookups. This module does that:
+the call count drops by roughly the square of the cell size, with the same pixel
+set and the same result.
 
 Bit-identity with means_by_masks (why reordering is safe here)
 -------------------------------------------------------------
-Every triangle's pixel sum is an exact integer: at most 255 * (32*33/2) =
-134640, far below 2^24, so float32 represents every partial sum exactly. Exact
-integer addition is associative, so the accumulation ORDER cannot change the
-value; both methods end up dividing the same exact integer sum by the same
-pixel count, in float32. `compare_with_masks` asserts this equality rather than
-assuming it.
+For a cell of side s, every triangle's pixel sum is an exact integer: at most
+255 * (s*(s+1)/2). For s = 32 that is 134640, far below 2^24, so float32
+represents every partial sum exactly. Exact integer addition is associative, so
+the accumulation ORDER cannot change the value; both methods end up dividing
+the same exact integer sum by the same pixel count, in float32.
+`compare_with_masks` asserts this equality rather than assuming it. The bound
+therefore depends on the configured maximum cell size: a cell side beyond 32
+would need the sum checked against 2^24 again.
 
 Ordering contract: identical to `brick_means` -- for leaf k, output rows 2k and
 2k+1 are its two halves in `brick_geom.leaves_to_triangles` order. Pixel runs
@@ -116,8 +116,8 @@ def means_by_rows(img, leaves):
 def compare_with_masks(img, leaves):
     """Diff `means_by_rows` against `brick_means.means_by_masks`.
 
-    Function: the equality this module claims is bit-identity, which is exactly
-    the kind of claim that silently rots, so it is stated as a runnable check.
+    Function: checks that the bit-identity claimed in the module docstring still
+    holds, as a runnable check rather than an assumption.
 
     Shape/semantics: both inputs as for `means_by_rows`; returns a flat dict --
     `identical` (bool, `np.array_equal` of the two (T,3) float32 arrays),

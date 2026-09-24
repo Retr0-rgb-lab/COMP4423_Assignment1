@@ -2,10 +2,9 @@
 task4_verify — correctness assertions + paired benchmarks for optimizations A/B/C/D.
 
 Runs headless (no camera, no window): it drives `brick_pipeline.render_frame`
-and the brick_* primitives directly on synthetic 640x480 frames. This is the
-verification gate the Task 4 record quotes: every optimization must pass its
-exactness assertion BEFORE its speed number is allowed into
-docs/progress/Task4.md.
+and the brick_* primitives directly on synthetic 640x480 frames. Every
+optimization must pass its exactness assertion before its measured speed is
+recorded in `docs/progress/Task4.md`.
 
 Checks (assertion -> what would falsify it):
   1. precomp partition leaves == sat partition leaves, sorted (bit-identical
@@ -16,12 +15,14 @@ Checks (assertion -> what would falsify it):
      count reported (expected: only 1-px fillPoly fringe near shared edges,
      border pass repaints exact boundaries) + Delta-E2000/PSNR of BOTH against
      the source frame (A must not move the quality metrics).
-  4. palette cache: 30 identical frames -> palette byte-identical between
-     rebuilds, rebuild happens exactly every `refresh` frames (C kills the
-     recorded flicker).
-  5. end-to-end: old path (sse=sat, list triangles, per-frame palette,
+  4. palette cache: 22 identical frames -> palette byte-identical between
+     rebuilds, rebuild happens exactly every `refresh` frames.
+  5. row-run means bit-identity: means_by_rows == means_by_masks.
+  6. end-to-end: old path (sse=sat, list triangles, per-frame palette,
      reference render) vs new path on the SAME frame -> pixel diff + quality
      metrics of both vs source.
+  7. temporal coherence: per-frame churn on a static scene must fall with
+     temporal reuse enabled.
 
 Benchmarks (paired, in-process, best of --reps, per the measurement-hygiene
 rules in Task4.md: ratios from paired runs, not single absolute FPS):
@@ -217,8 +218,9 @@ def check_means_rows(frame, leaves, reps):
     Function: asserts `means_by_rows == means_by_masks` exactly (the claim is
     bit-identity, proved by exact-integer sums), then times both.
 
-    Shape/semantics: `frame` (H,W,3) uint8 BGR, `leaves` a partition; prints and
-    asserts; returns the two (best_ms, median_ms) timing pairs.
+    Shape/semantics: `frame` (H,W,3) uint8 BGR, `leaves` a partition. Prints the
+    comparison and the two timings, then asserts bit-identity. Returns None:
+    the timing pairs are reported on stdout, not handed back.
     """
     padded, _, _ = pad_to_max(frame, 32)
     res = compare_with_masks(padded, leaves)
@@ -245,8 +247,8 @@ def check_temporal(identical, noisy, cfg, reps):
     lists must be the same length. Prints the table and asserts the temporal
     improvements before any of it may be quoted.
     """
-    # Warm-start fixed point: refining p0 should stay near p0, unlike two cold
-    # builds which differed by ~153/255 (the measured flash cause).
+    # Warm-start fixed point: refining p0 should stay near p0, which two
+    # independent cold builds would not be guaranteed to do.
     padded, _, _ = pad_to_max(identical[0], 32)
     leaves, _, _ = quadtree_partition(identical[0], cfg.S_set, cfg.budget, "mse",
                                       "sat")
@@ -275,11 +277,17 @@ def check_temporal(identical, noisy, cfg, reps):
           temporal_on : bool — whether the TemporalState (partition reuse, sticky
                         labels, render cache) is active for this sequence.
         Output:
-          records     : list of one dict per frame, each holding that frame's
-                        stage timings, the labels/canvas actually emitted, and
-                        the palette state. Semantics: `records[i]` corresponds to
-                        `frames[i]`; callers diff consecutive entries to measure
-                        churn. No array is returned.
+          tuple `(steady, flash, reused, frozen, render_hits)`:
+            steady     : list of per-frame churn fractions for frames where the
+                         palette was served from cache (`palette_refreshed`
+                         False). Callers take the mean to get steady churn.
+            flash      : same, for frames where the palette was rebuilt.
+            reused     : int, count of frames that reused the partition.
+            frozen     : int, count of frames that returned the frozen canvas.
+            render_hits: int, `tstate.render_hits` -- frames served from the
+                         render cache.
+          No array is returned; the values above are the per-frame churn between
+          consecutive canvases in `frames` order.
         """
         cv2.setRNGSeed(0)
         pal_state = PaletteState(cfg.palette_refresh)
@@ -314,8 +322,7 @@ def check_temporal(identical, noisy, cfg, reps):
 
     # Assertions: temporal ON must freeze a static scene and cut the churn.
     # The rebuild-frame bound is 0.1%, not 0: a warm-started entry can still
-    # move 1/255, which flips a handful of pixels sitting exactly on a palette
-    # boundary (~0.003% measured, i.e. single-digit pixels -- imperceptible).
+    # move 1/255, which flips any cell sitting exactly on a palette boundary.
     id_on = rows[("identical", True)]
     assert np.max(id_on[0]) == 0.0, "identical frames still churn with temporal ON"
     assert (max(id_on[1]) if id_on[1] else 0.0) < 0.001, \
@@ -337,14 +344,14 @@ def main():
     """Run the Task 4 verification suite and the optional paired benchmark.
 
     Function: parses CLI flags, runs every correctness assertion (partition
-    equivalence, vertex-exact triangles, zero-pixel render diff, palette cache
+    equivalence, vertex-exact triangles, bounded render diff, palette cache
     cadence, row-run means bit-identity, end-to-end old/new diff, temporal
     coherence), and with `--reps N` also prints the paired old/new stage
     timings. Exits non-zero if any assertion fails.
 
     Shapes
     ------
-    Input: CLI flags only (`--reps`, `--quick`, `--verbose`). Output: assertion
+    Input: CLI flags only (`--reps`, `--quick`). Output: assertion
     and timing lines on stdout; no arrays are returned. Semantics: the synthetic
     frames are (640, 480, 3) uint8 BGR, so the numbers describe that resolution
     and camera config rather than any specific camera.

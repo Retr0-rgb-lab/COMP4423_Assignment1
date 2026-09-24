@@ -1,15 +1,14 @@
 """
 brick_pipeline — the per-frame engine for the Task 4 live loop.
 
-Split out of `camera_app.py` (AGENTS 4.1: the driver stays thin; it should
-only parse args, own the capture loop and draw the window). Everything that
-transforms one camera frame into a rendered mosaic lives here:
+This module is the driver-independent half of the live app: it owns everything
+that transforms one camera frame into a rendered mosaic, so the per-frame engine
+can be benchmarked and verified without a window or a camera.
 
   * `FrameConfig`  — per-session settings (pure config, no arrays).
-  * `PaletteState` — cross-frame palette cache (optimization C: the palette
-                     is rebuilt only every N frames, which both amortises the
-                     K-Means cost and removes the recorded frame-to-frame
-                     colour flicker).
+  * `PaletteState` — cross-frame palette cache: the palette is rebuilt only
+                     every N frames, which both amortises the K-Means cost and
+                     suppresses frame-to-frame colour flicker.
   * `render_frame` — the seven pipeline steps, timed by the caller's
                      StageTimer, geometry-exact against the Task 3 reference
                      path (precomp partition == sat partition bit-for-bit;
@@ -20,7 +19,7 @@ Per frame: resize -> partition (precomp) -> triangles (array builder) ->
 means (fast) -> palette (cached) -> quantize -> render (batched). The padded
 image travels from the partition stage to the means stage through
 `quadtree_partition(return_padded=True)`, so the frame is padded ONCE
-(optimization D1; the old driver padded it twice).
+(optimization D1).
 """
 import time
 from dataclasses import dataclass, field
@@ -38,6 +37,10 @@ from brick_color_rt import palette_kmeans_warm, quantize_nearest_bgr_sticky
 from brick_render import render_triangles_batched
 from brick_means import extract_means, METHODS as MEANS_METHODS  # noqa: F401
 
+# Partitioning strategies `render_frame` can dispatch. Kept as a module constant
+# so the error message for a typo names the accepted set instead of guessing.
+PARTITIONS = ("quadtree", "region_merge")
+
 
 @dataclass
 class FrameConfig:
@@ -53,10 +56,12 @@ class FrameConfig:
                  in the report.
       scale    : float -- resize factor applied to the camera frame before
                  processing. 1.0 = process at native resolution.
-      means    : "mask" | "fast" | "sample" -- colour extraction method. "mask"
-                 is the slow shipped reference (it also averages a fringe of
-                 neighbouring pixels); "fast" is exact over the triangle's own
-                 pixels; "sample" approximates. See brick_means for measurements.
+      means    : "mask" | "fast" | "sample" | "rows" -- colour extraction
+                 method. "rows" is the default and is bit-identical to "fast"
+                 via exact-integer row prefix sums; "mask" is the slow shipped
+                 reference (it also averages a fringe of neighbouring pixels);
+                 "fast" is exact over the triangle's own pixels; "sample"
+                 approximates. See brick_means for measurements.
       sse_impl : "precomp" | "sat" | "ref" -- quadtree split-priority
                  implementation (see brick_quadtree). "precomp" is the Task 4
                  default and is bit-identical to "sat" for the "mse" priority.
@@ -111,18 +116,26 @@ class FrameConfig:
 
 
 def powers_of_two_upto(smax, smin=1):
-    """[smin, 2*smin, ..., smax] as the sorted power-of-two family.
+    """[smin, 2*smin, ..., <= smax] as an ascending doubling family.
 
     Function: builds the S_set the partitioners require. The quadtree splits by
-    halving and region_merge validates `S_max/S_min` is a power of two, so a
-    non-power-of-two input would otherwise fail deep inside the engine.
+    halving and region_merge validates `S_max/S_min` is a power of two, so
+    `smin` must itself be a power of two -- which is checked here rather than
+    left to fail deeper inside the engine.
 
-    Shape: ints in, `list[int]` out, ascending, always containing `smin` and the
-    largest power of two <= `smax`. Semantics: element i is the cell side in
-    pixels; `out[-1]` is the largest brick size this session can produce.
+    Shape: ints in, `list[int]` out. Semantics: element i is the cell side in
+    pixels, starting at `smin` and doubling; `out[0] == smin` always and
+    `out[-1]` is the largest value <= `smax`, which may be smaller than `smax`
+    when `smax` is not a power of two. That is the largest brick size this
+    session can produce.
+
+    Raises: ValueError when `smin` or `smax` is below 1, when `smax < smin`, or
+    when `smin` is not a power of two.
     """
     if smin < 1 or smax < smin:
         raise ValueError(f"need 1 <= smin <= smax, got smin={smin} smax={smax}")
+    if smin & (smin - 1):
+        raise ValueError(f"smin must be a power of two, got {smin}")
     out, s = [], smin
     while s <= smax:
         out.append(s)
@@ -135,14 +148,10 @@ class PaletteState:
 
     Function
     --------
-    Optimization C (Task 4). The shipped loop rebuilt the K-Means palette on
-    EVERY frame, which cost ~23 ms per frame AND made the palette drift on a
-    static scene (measured: up to 207/255 per channel across 5 calls on
-    identical input -- see docs/progress/Task4.md). Rebuilding only every N
-    frames fixes both: the K-Means cost is paid once per N frames, and between
-    rebuilds the palette is BYTE-IDENTICAL, so a static scene renders with a
-    constant palette -- zero flicker. The adaptation lag to a genuinely new
-    scene is at most N frames and must be declared in the report.
+    The palette is rebuilt every `refresh` frames and served from cache in
+    between. Between rebuilds the palette is BYTE-IDENTICAL, so a static scene
+    renders with a constant palette. The adaptation lag to a genuinely new
+    scene is at most `refresh` frames and must be declared in the report.
 
     Shapes / semantics
     ------------------
@@ -162,10 +171,9 @@ class PaletteState:
         `refresh` is the rebuild period in frames. `deadband` is the palette
         equivalent of the label hysteresis: if a warm-started rebuild moves no
         entry by more than this many grey levels, the previous palette is kept
-        byte-for-byte. Without it, a 1/255 refinement still flips a few cells
-        that sit exactly on a palette boundary (~0.3% of pixels measured on a
-        static frame), which is an invisible palette change causing a visible
-        label change.
+        byte-for-byte. Without it, a 1/255 refinement can still flip a cell
+        sitting exactly on a palette boundary -- an invisible palette change
+        producing a visible label change.
         """
         self.refresh = max(1, int(refresh))
         self.deadband = float(deadband)
@@ -176,16 +184,18 @@ class PaletteState:
     def get(self, means, k, method):
         """Return the cached palette, rebuilding it when the period expires.
 
-        Shape: `means` is (T, 3) float32 BGR; returns (k, 3) uint8 BGR.
+        Shape: `means` is (T, 3) float32 BGR; returns (k, 3) uint8 BGR, or
+        (k_eff, 3) where `k_eff = min(k, T)` on a cold K-Means build with fewer
+        triangles than clusters.
         Semantics: on rebuild frames the palette is REFINED from the previous
-        one by `palette_kmeans_warm` (opt A) -- a warm start cannot jump to a
-        different local optimum, which is what removed the measured 76% flash
-        -- and `age` resets to 1; on cached frames the identical array object is
-        returned and `age` grows by 1, so downstream quantize results are
-        byte-stable between rebuilds. The very first call has no previous
-        palette and does a normal cold `build_palette`. The K guard covers a
-        config change mid-session (defensive; the app fixes K for the run).
-        `median_cut` is deterministic and needs no warm start.
+        one by `palette_kmeans_warm` -- a warm start cannot jump to a different
+        local optimum -- and `age` resets to 1; on cached frames the identical
+        array object is returned and `age` grows by 1, so downstream quantize
+        results are byte-stable between rebuilds. The very first call has no
+        previous palette and does a normal cold `build_palette`. If K changes
+        mid-session the cache is rebuilt cold, because a warm start preserves
+        entry identity and there is no correspondence to preserve across a
+        different K. `median_cut` is deterministic and needs no warm start.
 
         Dead-band: a warm-started rebuild whose largest per-entry move is within
         `deadband` grey levels is discarded (the previous palette is kept, no
@@ -194,8 +204,15 @@ class PaletteState:
         """
         if (self.palette is None or self.age >= self.refresh
                 or self.palette.shape[0] != k):
-            if self.palette is not None and method in ("kmeans_lab",
-                                                       "kmeans_rgb"):
+            # A warm start preserves palette-entry identity, which only makes
+            # sense when the previous palette already has k entries. If K
+            # changed mid-session there is no correspondence to preserve, so
+            # fall back to a cold build rather than letting palette_kmeans_warm
+            # clamp the result back to the old K.
+            can_warm = (self.palette is not None
+                        and self.palette.shape[0] == k
+                        and method in ("kmeans_lab", "kmeans_rgb"))
+            if can_warm:
                 space = "lab" if method == "kmeans_lab" else "rgb"
                 new = palette_kmeans_warm(means, k, self.palette, space)
                 moved = int(np.abs(new.astype(int)
@@ -219,22 +236,24 @@ class PaletteState:
 
 
 def render_frame(frame, cfg, timer, palette_state, temporal_state=None):
-    """Run the full Task 3 pipeline on one frame; returns (canvas, info).
+    """Run the full Task 3 pipeline on one frame.
 
     Function
     --------
+    Returns `(canvas, processed, info)`; see the Shapes section below for the
+    per-value contract of each element.
+
     Same seven steps as the Task 3 experiment driver, minus the metric suite
-    (metrics are far too slow for a live loop and are not needed to display),
-    plus the Task 4 optimizations:
+    (the metric suite is not needed to display a frame):
       B  partition split-priorities precomputed (impl="precomp");
-      D1 the padded image carried from partition to means (no double pad) and
+      D1 the padded image carried from partition to means (one pad) and
          triangles built vectorised into one (T, 3, 2) array;
       C  palette served from the cross-frame cache, warm-started on rebuild;
       A  render batched by palette label (<=K fillPoly calls + 1 polylines);
       B+C temporal coherence -- when `temporal_state` is given and the scene is
          static, the cached partition and triangle array are reused and the
          sticky quantizer applies a label dead-band. With temporal_state=None
-         the function is exactly the step-4 pipeline (used by the gates).
+         no reuse path is taken.
       E  render reuse -- when the reused partition's labels AND palette are
          byte-identical to the previous frame, the previous canvas is returned
          instead of re-rasterising (the canvas is a pure function of them).
@@ -305,10 +324,16 @@ def render_frame(frame, cfg, timer, palette_state, temporal_state=None):
             leaves, padded_shape, orig_shape, padded = quadtree_partition(
                 frame, cfg.S_set, cfg.budget, cfg.priority, cfg.sse_impl,
                 return_padded=True)
-        else:
+        elif cfg.partition == "region_merge":
             leaves, padded_shape, orig_shape = region_merge_partition(
                 frame, cfg.S_set, cfg.budget)
             padded, _, _ = pad_to_max(frame, max(cfg.S_set))
+        else:
+            raise ValueError(
+                f"Unknown cfg.partition {cfg.partition!r}; expected "
+                f"{PARTITIONS!r}. A typo must not silently run region-merge "
+                f"under the label of the requested algorithm."
+            )
 
     with timer.stage("triangles"):
         tri = temporal_state.tri if reuse else leaves_to_triangles_array(leaves)

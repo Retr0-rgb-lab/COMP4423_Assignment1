@@ -1,15 +1,10 @@
 """
 Task 3 analysis: perceptual quality vs the largest allowed cell size (S_max).
 
-This is the figure that tests whether the quality-vs-S_max curve is monotonic
-or has an interior optimum. Headline result on sky.jpg:
-
-    ΔE2000   : best at S_max=32 (10.61), then WORSE at 64/128/256 (~11.8, flat)
-    SSIM etc.: rises 32 -> 64, then saturates (128 == 256 == 64)
-
-So the curve is NOT monotonic in perceptual colour (it is monotone-worsening
-then flat), and the perceptual optimum sits at the smallest S_max the
-quadtree can start from on this image (~32; smaller starts exceed the budget).
+Measures whole-image Delta-E2000 and mask-restricted (brick-interior) Delta-E
+across a sweep of S_max values, to test whether the quality curve is monotonic
+or has an interior optimum. The measured result and its interpretation are in
+docs/progress/Task3.md.
 
 Palette is Median Cut (deterministic) so runs are reproducible.
 
@@ -46,9 +41,7 @@ def measure(img, smax, smooth_mask, edge_mask):
     --------
     Runs the standard pipeline for a single S_max (quadtree, K=8, median-cut
     palette) and additionally splits the per-pixel Delta_E_2000 map into flat
-    and edge regions. That split is the point of this script: the whole-image
-    Delta_E hides the fact that large flat areas and edges move in OPPOSITE
-    directions as S_max grows, which is the finding the figure exists to show.
+    and edge regions, so the two can move independently as S_max grows.
 
     A note on why the palette is median-cut here and K-Means elsewhere: median
     cut is deterministic, so the four S_max points differ ONLY in S_max. With
@@ -115,18 +108,13 @@ def main():
     is better), panel 2 = SSIM / Edge F1 / EPI (higher is better). Both x-axes
     are log2 with explicit ticks, so the S_max points are evenly spaced.
 
-    The figure's title states the finding rather than the procedure -- "metrics
-    disagree" -- which is intentional: a reader skimming figures should not be
-    able to mistake this for a monotone improvement curve.
-
     Shapes: `rows` is a list of `measure` dicts, one per S_max, length
     len(S_MAXES) = 4. The masks are (H, W) bool; `gray` / `sob` are (H, W)
     float64. Output `pics/task3/analysis/smax_curve.png`; returns None.
 
     Threshold semantics (worth keeping if the masks are ever re-tuned): the
-    percentiles are computed on the SOURCE only, and the 60th/95th choice is
-    what makes the flat set the large majority of the image -- which is the
-    regime that dominates human perception in Task 3's conclusion.
+    percentiles are computed on the SOURCE only, so the masks are identical
+    across every S_max and the split is a like-for-like comparison.
     """
     os.makedirs(OUT_DIR, exist_ok=True)
     img = cv2.imread(DEFAULT_INPUT)

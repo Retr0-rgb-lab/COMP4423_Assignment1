@@ -1,5 +1,5 @@
 """
-task3_best_vs_task2 — the "ultimate 2x2" comparison figure for the report.
+task3_best_vs_task2 — side-by-side comparison figure.
 
 Composes four panels into one grid (AGENTS section 1.1, summary/best_vs_task2.png):
 
@@ -7,17 +7,16 @@ Composes four panels into one grid (AGENTS section 1.1, summary/best_vs_task2.pn
     -----------------|--------------------------------
     Task 3 best      | (empty / reused Task 3 best)
 
-Purpose: the report's section 3 vs section 4 argument — adaptive multi-size
-Task 3 preserves structure that the uniform Task 2 grid cannot, at the cost of
-a little pixel-level fidelity. The figure is a pure composition of already
-rendered PNGs (no re-partition, no new metrics), so it is deterministic.
+The figure is a pure composition of already rendered PNGs (no re-partition, no
+new metrics), so it is deterministic. The comparison it supports is discussed in
+docs/progress/Task3.md.
 
 Shapes
 ------
 Inputs (all expected to be the same (H, W, 3) uint8 BGR after task2/task3 crop):
   sky.jpg                    -- the original test image
-  pics/task2/out_task2.png   -- Task 2 render (post black-band fix)
-  pics/task3/best/best_config.png -- Task 3 chosen config render
+  pics/task2/out_task2.png   -- Task 2 render
+  pics/task3/best/best_config.png -- Task 3 best-config render
 Output:
   (2*(H+cap) + 3*gap, 2*W + 3*gap, 3) uint8 BGR, saved to
   pics/task3/summary/best_vs_task2.png.
@@ -39,13 +38,18 @@ def _panel(img, label):
     """Stack `img` above a caption strip; return the (H+CAP, W, 3) panel.
 
     Shape/semantics: input (H, W, 3) uint8 BGR; output (H+CAP, W, 3) with
-    white caption text centred in the bottom CAP-px strip.
+    white caption text horizontally centred in the bottom CAP-px strip. The x
+    origin is computed from the measured text extent via `cv2.getTextSize`, so
+    the caption is centred for any label length or panel width rather than at a
+    fixed offset.
     """
     H, W = img.shape[:2]
     panel = np.full((H + CAP, W, 3), 20, dtype=np.uint8)
     panel[:H] = img
-    cv2.putText(panel, label, (W // 2 - 180, H + 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2
+    (tw, _), _ = cv2.getTextSize(label, font, scale, thick)
+    x = max(4, (W - tw) // 2)
+    cv2.putText(panel, label, (x, H + 30), font, scale, (255, 255, 255), thick)
     return panel
 
 

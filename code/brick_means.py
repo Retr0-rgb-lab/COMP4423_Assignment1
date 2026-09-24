@@ -5,16 +5,16 @@ points on the speed/accuracy curve.
 The existing `brick_render.triangle_means_bgr` is the reference: for every
 triangle it builds a full-frame mask and calls `cv2.mean(img, mask)`. That is
 correct but its cost is **O(T · H · W)** -- every primitive scans the whole
-frame -- and it is the single dominant cost of the live camera loop (75% of the
-frame budget, 1604 ms of 2140 ms at 640x480 with 9990 triangles).
+frame -- which makes it the dominant cost of the live camera loop.
 
 This module adds two alternatives that exploit the fact that a brick is a square
 cell split by a diagonal, so the pixels of each triangle are known analytically:
 
   * `means_by_masks`    -- EXACT (same definition of "mean" as the reference),
                            O(H*W) total work, vectorised per cell size.
-  * `means_by_sampling` -- APPROXIMATE: averages a few strictly-interior sample
-                           points per triangle. Fully vectorised, ~O(T).
+  * `means_by_sampling` -- APPROXIMATE: averages at most `n_samples` points
+                           drawn from each triangle's full half-mask, boundary
+                           pixels included. Fully vectorised, ~O(T).
 
 `extract_means` dispatches on a method name so the driver can switch
 implementations from the command line, which is what makes the Task 4
@@ -28,8 +28,8 @@ boundaries, `fillPoly` paints an extra one-pixel fringe along the RIGHT and
 BOTTOM edges -- pixels whose centres are outside the polygon, i.e. pixels that
 belong to the NEIGHBOURING cell. `triangle_means_bgr` then averages that
 inflated pixel set, so every brick's colour is contaminated by its bottom-right
-neighbours, worst for the small bricks. Measured on one cell, both halves, for
-each size (in-cell pixels vs the pixels `fillPoly` actually claims):
+neighbours, worst for the small bricks. In-cell pixels vs the pixels `fillPoly`
+actually claims, per cell size, both halves:
 
     size   own px   fillPoly px   leaked px   leak as % of own
        1        1             6           4               400%
@@ -39,13 +39,11 @@ each size (in-cell pixels vs the pixels `fillPoly` actually claims):
       16      256           306          34                13%
       32     1024          1122          66                 6%
 
-That matters because the Task 3 size distribution is dominated by the small
-sizes ({2: 1489, 4: 1853} of 4995 cells), i.e. exactly the bricks where the
-contamination is largest. The PDF asks for each brick's colour to come "from its
-own image region", so the in-cell partition below is the faithful reading and the
-reference is the defective one. The reference is NOT changed here, because every
-recorded Task 2/3 number depends on it; this module is where the corrected
-version lives, and `compare_means` below quantifies the difference.
+The PDF asks for each brick's colour to come "from its own image region", so the
+in-cell partition below is the faithful reading and the `fillPoly` reference is
+the defective one. The reference is left unchanged so that every recorded Task
+2/3 number keeps its original definition; the corrected versions live here, and
+`compare_means` below quantifies the difference.
 
 The functions here partition each cell's pixels analytically:
 
@@ -133,12 +131,12 @@ def means_by_masks(img, leaves):
     total number of gathered pixels across all offsets is exactly H*W, so the work
     is O(H*W) for the whole image instead of O(T*H*W).
 
-    This is the CORRECTED mean, not a faster version of the reference: it sums
-    only the triangle's own in-cell pixels, while `brick_render.triangle_means_bgr`
-    additionally averages a one-pixel fringe of neighbouring pixels along the
-    right and bottom edges (see the module docstring for the measured size). The
-    two therefore disagree on purpose, and on small bricks the reference's extra
-    pixels outnumber the real ones. Use `compare_means` to see the difference.
+    This sums only the triangle's own in-cell pixels, whereas
+    `brick_render.triangle_means_bgr` additionally averages a one-pixel fringe of
+    neighbouring pixels along the right and bottom edges (see the module
+    docstring). The two therefore disagree by design, and on small bricks the
+    reference's extra pixels outnumber the real ones. `compare_means` reports the
+    difference.
 
     Why offsets rather than a mask per cell: a cell's pixel set is determined by
     its origin plus a size-only offset pattern, so one offset list per (size,
@@ -197,14 +195,16 @@ def means_by_masks(img, leaves):
 
 
 def means_by_sampling(img, leaves, n_samples=9):
-    """Approximate per-triangle mean colour from a few interior sample points.
+    """Approximate per-triangle mean colour from a sample of its pixels.
 
     Function
     --------
     Uses the same half-masks as `means_by_masks`, but instead of summing every
     pixel of the half it takes an evenly spaced subset of at most `n_samples`
-    interior pixels and averages those. Fully vectorised: one gather per sample
-    point, each covering every triangle of that (size, half, parity) class.
+    pixels from the full half-mask -- boundary pixels included, since the sample
+    points are `np.argwhere(mask)` over the whole mask. Fully vectorised: one
+    gather per sample point, each covering every triangle of that
+    (size, half, parity) class.
 
     Trade-off (this is the point of having it): cost is O(T * n_samples) instead
     of O(H*W), which stops depending on the image size at all, at the price of a
@@ -225,8 +225,11 @@ def means_by_sampling(img, leaves, n_samples=9):
 
     Edge cases: for a 1-pixel triangle the half holds 0 or 1 pixels; a half with
     no interior pixel falls back to the single nearest in-cell pixel so a colour
-    is always produced rather than a NaN.
+    is always produced rather than a NaN. `n_samples` below 1 is raised rather
+    than clamped, because an empty subsample would make the mean `0/0`.
     """
+    if n_samples < 1:
+        raise ValueError(f"n_samples must be >= 1, got {n_samples}")
     leaves = list(leaves)
     out = np.zeros((2 * len(leaves), 3), dtype=np.float32)
     for s, (idx, xs, ys, par) in cell_groups(leaves).items():
@@ -251,12 +254,13 @@ def means_by_sampling(img, leaves, n_samples=9):
 
 
 def extract_means(img, leaves, method="mask", n_samples=9):
-    """Dispatch to one of the three mean-colour implementations by name.
+    """Dispatch to one of the four mean-colour implementations by name.
 
     Function: the single switching point for the whole speed/accuracy choice, so
-    the camera driver carries a string and nothing else. `mask` is the reference
-    implemented in `brick_render` and is imported lazily to keep this module from
-    depending on the rasteriser at import time.
+    the camera driver carries a string and nothing else. The accepted names are
+    `brick_means.METHODS` = ("mask", "fast", "sample", "rows"). "mask" is the
+    reference implemented in `brick_render` and is imported lazily to keep this
+    module from depending on the rasteriser at import time.
 
     Shapes: `img` (Hp, Wp, 3) uint8 BGR padded; `leaves` iterable of
     `(x, y, size)`. Returns `(2*len(leaves), 3)` float32 with the ordering
@@ -301,14 +305,12 @@ def compare_means(img, leaves, n_samples=9):
       neighbour fringe; a max of a few tens of units on small bricks is the
       documented defect, not a failure of this module.
       `ref_mean_absdiff_vs_own` -- the same comparison for the reference itself,
-      i.e. how far the shipped mean is from the correct in-cell mean. This is the
-      headline number for the defect.
+      i.e. how far the shipped mean is from the correct in-cell mean.
       `ref_extra_px` / `own_px` -- pixels the reference averages beyond the
       triangle's own, and the own-pixel total, so the leak can be quoted as a
       ratio rather than as an unexplained colour difference.
       `sample_own_mean_absdiff` -- the sampling method against the CORRECT
-      in-cell mean, which is the honest accuracy figure for it (comparing it to
-      the leaky reference would flatter it).
+      in-cell mean.
 
     Reading the output: a LARGE max together with a small mean is the signature of
     a permuted row (broken ordering); a moderate max concentrated on small cells

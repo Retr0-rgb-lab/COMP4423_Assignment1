@@ -11,10 +11,6 @@ Three small concerns that drivers need and that no engine module owns:
                     before/after table are all the SAME measurement.
   * `open_camera` -- opening the webcam, which is plumbing rather than a driver
                     decision, so it lives here instead of in the camera driver.
-
-Why a module: `save_png` was written for the Task 2 driver, and Task 4 needs it
-too. Copying it would leave two versions of the "cv2 hides its failures" fix,
-which is exactly the kind of duplication that lets one copy rot.
 """
 import os
 import time
@@ -66,9 +62,9 @@ class StageTimer:
     Shape / semantics
     -----------------
     `self.samples` is `dict[str, list[float]]` -- stage name -> list of elapsed
-    SECONDS, one entry appended per completed `stage()` block, in call order. A
-    stage entered but never exited (an exception mid-block) appends nothing, so
-    a failing frame cannot poison the statistics with a bogus duration.
+    SECONDS, one entry appended per completed `stage()` block, in call order. The
+    append happens in a `finally`, so a block that RAISES still contributes its
+    elapsed time; see `stage()` for that caveat.
     `report()` returns `dict[str, dict]` with keys `n`, `mean_ms`, `median_ms`,
     `total_ms`, plus `"__total__"` for the summed median of every stage.
 
@@ -109,12 +105,13 @@ class StageTimer:
             self.samples[name].append(time.perf_counter() - t0)
 
     def reset(self):
-        """Drop all samples, keeping the stage names that were registered.
+        """Drop every sample and every stage key.
 
-        Shape/semantics: `self.samples` becomes empty; it stays a
-        `defaultdict(list)`, so previously seen stage names need no
-        re-registration and `report()` on a freshly reset timer returns only the
-        `__total__` row with zero counts.
+        Shape/semantics: `self.samples.clear()` empties the `defaultdict(list)`
+        entirely -- both the recorded durations AND the stage-name keys. A stage
+        name does not need re-registration: the defaultdict recreates its key on
+        the next `stage()` call with that name. `report()` on a freshly reset
+        timer returns only the `__total__` row with zero counts.
         """
         self.samples.clear()
 

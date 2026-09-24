@@ -19,9 +19,7 @@ Six experiment groups (15 runs total):
     D_palette     : palette in {kmeans_lab, median_cut}     (2)
     E_priority    : priority in {mse, edgef1}               (2)
 
-Metric-count changes belong in `brick_metrics`, which owns the authoritative
-key list; do not restate a count in this header (prose drifted from code here
-before).
+Metric keys are owned by `brick_metrics`; this header does not restate a count.
 """
 import argparse
 import csv
@@ -74,11 +72,12 @@ class Task3Config:
                         the quadtree partition or the E_group is a no-op.
       K               : int  -- palette size, >= 1.
       palette_method  : "kmeans_lab" | "kmeans_rgb" | "median_cut".
-      seed            : int  -- forwarded to the palette builder. Note it does
-                        NOT make K-Means reproducible on its own: cv2.kmeans uses
+      seed            : int  -- forwarded to the palette builder. It does NOT
+                        make K-Means reproducible on its own: cv2.kmeans uses
                         OpenCV's global RNG, so a caller must also call
-                        `cv2.setRNGSeed` (task3_best does; this sweep does not,
-                        which is why the sweep's K-Means runs are not bit-exact).
+                        `cv2.setRNGSeed` (task3_best does, so its runs are
+                        bit-reproducible; this sweep does not seed, so its
+                        K-Means runs are reproducible only to within one restart).
       out_dir         : str  -- filled in by `build_experiment_grid`.
     """
     name: str
@@ -95,7 +94,7 @@ class Task3Config:
     def label(self):
         """One-line human summary of the config, used in the run log header.
 
-        Shape: no arrays. Semantics: a `" | "`-joined string of the six
+        Shape: no arrays. Semantics: a `" | "`-joined string of the five
         settings that vary across the sweep, in the order
         K / S_set / partition / priority / palette -- so two runs can be told
         apart by reading one log line.
@@ -247,10 +246,9 @@ def build_experiment_grid(out_root):
     `<out_root>/<group>`, and the returned configs deliberately do NOT validate
     their S_set / partition / priority combinations.
 
-    Note on B_sweep: it is kept even though it was later shown to be a no-op
-    (the budget binds at size 4, so S_min in {1, 2, 4} are equivalent). It stays
-    as part of the experimental record -- see docs/progress/Task3.md -- rather
-    than being deleted, so the reasoning trail is reproducible.
+    Note on B_sweep: the budget binds at size 4 for this image, so the
+    S_min in {2, 4, 8} runs are equivalent. It is retained as part of the
+    experimental record rather than deleted; see docs/progress/Task3.md.
     """
     configs = []
 
@@ -258,8 +256,7 @@ def build_experiment_grid(out_root):
     for K in [4, 8, 16]:
         configs.append(Task3Config(name=f"k{K:02d}", group="A_ksweep", K=K))
 
-    # B. S-set sweep (S_min). Kept as a record: it turned out to be a no-op
-    # because the budget binds at size 4, so S_min in {1,2,4} are equivalent.
+    # B. S-set sweep (S_min). Retained as a record; see the note above.
     for s_set in [[2, 4, 8, 16, 32], [4, 8, 16, 32], [8, 16, 32]]:
         tag = "_".join(str(s) for s in s_set)
         configs.append(Task3Config(name=f"s_{tag}", group="B_sweep", S_set=s_set))
@@ -303,8 +300,8 @@ def build_summary(out_root, all_metrics):
     Function
     --------
     This is the cross-group summary figure/table for the report: one CSV row per
-    run (all 15 groups together, in the order the runs were executed) and one
-    bar chart covering all of them.
+    run (all 15 runs across the six experiment groups, in execution order) and
+    one bar chart covering all of them.
 
     Shape
     ------

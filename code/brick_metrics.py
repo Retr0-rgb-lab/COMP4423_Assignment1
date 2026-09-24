@@ -32,12 +32,10 @@ Image artifact (not a metric):
     Heatmap         (H, W, 3) uint8 JET-encoded per-pixel Delta_E_2000 map
 
 CAVEAT -- FPS is NOT an end-to-end frame rate. `compute_metrics` only does
-`1.0 / elapsed_s`; what `elapsed_s` covers is decided by each caller and
-differs between them (in the Task 2 driver it is quantize+render only, in the
-Task 3 drivers it also includes partitioning and mean extraction, and in no
-driver does it include the metric computation itself). Compare FPS only
-between runs that used the same driver, and state the interval when quoting
-it in the report.
+`1.0 / elapsed_s`; what `elapsed_s` covers is decided by each caller (the Task 2
+driver times quantize+render, the Task 3 drivers also include partitioning and
+mean extraction, and no driver includes the metric computation). Compare FPS only
+between runs from the same driver, and state the interval when quoting it.
 """
 import cv2
 import numpy as np
@@ -58,9 +56,7 @@ def _ssim_window(shape):
     `img.shape` on an (H, W, 3) array is accepted directly. Returns an int, or
     None when the short side is < 3 (no odd window >= 3 can fit).
     Semantics: `min(7, m)` for odd `m`, `min(7, m - 1)` for even `m`, where
-    `m = min(shape[-2:])`. Any image at least 9 px on its short side gives 7 --
-    bit-identical to what both callers computed before this helper existed, so no
-    recorded Task 2/3 number changes.
+    `m = min(shape[-2:])`. Any image at least 9 px on its short side gives 7.
     """
     m = min(shape[-2], shape[-1])
     if m < 3:
@@ -100,10 +96,9 @@ def multi_scale_ssim(img, canvas, levels=4):
     sizes without checking that both got the full 4 levels.
 
     Window convention: shared with `compute_metrics` via `_ssim_window`, so the
-    file has one small-image rule rather than two. Only behaviour change from
-    unifying them: a level exactly 3 px across now scores with win=3 instead of
-    being skipped, because the old `min(7, m - 1)` rule discarded 3 as even.
-    Unreachable from the Task 2-3 images (the pyramid starts at m >= 37).
+    file has one small-image rule rather than two. A level exactly 3 px across
+    scores with win=3. If the image is so small that NO level admits a valid
+    window, the function returns 0.0 rather than NaN.
     """
     g_orig = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float64)
     g_out = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY).astype(np.float64)
@@ -118,6 +113,12 @@ def multi_scale_ssim(img, canvas, levels=4):
         if len(scores) < levels:
             cur_o = cv2.pyrDown(cur_o)
             cur_c = cv2.pyrDown(cur_c)
+    if not scores:
+        # An image whose short side is < 3 px has no valid SSIM window at any
+        # pyramid level. `np.mean([])` would return NaN and silently poison the
+        # metrics table, so report the floor instead: no evidence of structural
+        # similarity is the worst possible score.
+        return 0.0
     return float(np.mean(scores))
 
 
@@ -361,10 +362,8 @@ def compute_metrics(img, canvas, means_bgr, labels, palette_bgr, n_triangles,
               Quant_Error, Budget_Util, N_Triangles, FPS, Heatmap.
 
     Raises:
-      ValueError -- when `min(H, W) < 3`, i.e. no valid SSIM window exists. This
-      used to crash inside skimage with an opaque window-size error, because the
-      old code forced a window of 3 onto an image that could not hold one. SSIM
-      is simply undefined below 3 px on a side, so failing explicitly is the fix.
+      ValueError -- when `min(H, W) < 3`, i.e. no valid SSIM window exists. SSIM
+      is undefined below 3 px on a side, so failing explicitly is the contract.
     """
     H, W = img.shape[:2]
     psnr = float(peak_signal_noise_ratio(img, canvas, data_range=255))

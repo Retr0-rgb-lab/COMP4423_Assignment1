@@ -11,21 +11,23 @@ that turns one frame into a rendered mosaic lives in `brick_pipeline.py`
 (FrameConfig / PaletteState / render_frame), so the per-frame engine can be
 benchmarked and verified without a window or a camera.
 
-Level 1 is camera capture + display, and this driver does exactly that: the
-FULL Task 3 pipeline runs on every frame with no caching of geometry and no
-approximation of colour, because it is the honest baseline the Level 4
-before/after comparison is measured against. The Task 4 speedups (precomputed
-split priorities, vectorised triangles, palette refresh cadence, batched
-render) are exact against that baseline -- see docs/progress/Task4.md.
+Level 1 is camera capture + display. The default configuration runs the full
+Task 3 pipeline per frame with precomputed split priorities, vectorised
+triangles, a palette refresh cadence, batched render, and temporal reuse
+(`brick_pipeline.FrameConfig` defaults; `--preset` and the individual flags
+override them). The optimizations are exact with respect to geometry and colour
+except for the documented `freeze_colour_on_reuse` behaviour, which reuses the
+previous canvas only while the scene signature is unchanged. The before/after
+measurement and its caveats are in docs/progress/Task4.md.
 
 The window shows BOTH panes: `a) camera input` left, `b) triangle bricks`
 right, live statistics drawn over the render pane. Showing the source beside
-the result is the point -- a mosaic judged without its input says nothing
-about fidelity. It is created with `WINDOW_NORMAL`, so it is resizable by
-dragging (the default `imshow` window is locked to the image's pixel size --
-`WND_PROP_AUTOSIZE` is 1.0 -- and cannot be enlarged, which looks tiny on a
-large monitor). `--window-scale` sets the initial size. Close it with the
-window's X (or q/ESC); X is detected via `brick_display.window_closed`.
+the result lets a viewer judge fidelity directly. It is created with
+`WINDOW_NORMAL`, so it is resizable by dragging (the default `imshow` window is
+locked to the image's pixel size -- `WND_PROP_AUTOSIZE` is 1.0 -- and cannot be
+enlarged, which looks tiny on a large monitor). `--window-scale` sets the
+initial size. Close it with the window's X (or q/ESC); X is detected via
+`brick_display.window_closed`.
 
 Usage (Windows venv; WSL has no display, so add --no-show there):
     python code\\camera_app.py                    # default: full 9990 bricks
@@ -59,14 +61,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SNAPSHOT_DIR = os.path.join(HERE, "pics", "task4")
 WINDOW = "Task 4: triangle-brick camera"
 
-# Three points on the measured brick-count / frame-cost curve; the table is in
-# docs/progress/Task4.md. Note `budget` counts BRICKS, i.e. triangles, not cells --
-# a cell is two bricks, so `quality` produces 4995 cells, not 9990.
+# Three operating points on the brick-count / frame-cost curve; the measured
+# table is in docs/progress/Task4.md. Note `budget` counts BRICKS, i.e.
+# triangles, not cells -- a cell is two bricks, so `quality` produces 4995 cells,
+# not 9990.
 #
 # `quality` is the default because the PDF caps bricks at 10000 and grades the
-# output. Measured, the full budget costs ~216 ms/frame against 73 ms for 498
-# cells (pre-optimization numbers); `fast` exists for a machine that cannot
-# keep up even after the Task 4 optimizations.
+# output. `fast` exists for a machine that cannot keep up at the full budget.
 PRESETS = {
     "quality": {"scale": 1.0, "budget": 9990, "k": 16},
     "balanced": {"scale": 1.0, "budget": 5000, "k": 8},
@@ -317,8 +318,7 @@ def main():
             n_frames += 1
 
             # The window shows the camera frame and this project's render side by
-            # side: the pair is the deliverable, because a mosaic judged without
-            # its source tells the viewer nothing about fidelity.
+            # side, so the viewer can compare the source against the mosaic.
             view, render_x0 = make_side_by_side(processed, canvas)
 
             if args.save_render:

@@ -24,10 +24,7 @@ Pipeline (single method, `--method otsu|kmeans|fixed`):
 (fair comparison) and writes per-method PNGs, a 4-tile compare grid, a
 residual panel, and a metrics bar chart.
 
-NOTE on the metric count: do not restate a number here. `brick_metrics`'s module
-docstring is the single authoritative list of keys and the code has drifted from
-prose before ("9 metrics" vs "12 metrics" for the same dict). Count changes go in
-`brick_metrics`, not in this header.
+Metric keys are owned by `brick_metrics`; this header does not restate a count.
 """
 import argparse
 import os
@@ -166,10 +163,10 @@ def run_single(img, method, args):
 
     Timing caveat (this is the Task 2 driver, so its FPS is NOT the Task 3 one):
     `t0` is started AFTER `preprocess`, so the reported FPS covers ONLY
-    quantize + render. It excludes the per-triangle mean extraction (the most
-    expensive step here) and excludes the metric computation. Do not compare
-    this FPS against a Task 3 run, whose interval also includes partitioning --
-    see the FPS caveat in the brick_metrics module docstring.
+    quantize + render. It excludes the per-triangle mean extraction and the
+    metric computation. Do not compare this FPS against a Task 3 run, whose
+    interval also includes partitioning -- see the FPS caveat in the
+    brick_metrics module docstring.
 
     Shapes
     ------
