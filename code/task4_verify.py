@@ -261,6 +261,26 @@ def check_temporal(identical, noisy, cfg, reps):
     assert warm < cold // 2, "warm start did not stabilise the palette"
 
     def run_sequence(frames, temporal_on):
+        """Run the live engine over a frame sequence and return per-frame records.
+
+        Function: seeds OpenCV's RNG for a reproducible palette, then runs
+        `brick_pipeline.render_frame` once per input frame with a shared
+        `PaletteState` and (optionally) a shared `TemporalState`, so frame-to-frame
+        state carries across the sequence exactly as it does in the live loop.
+
+        Shapes
+        ------
+        Input:
+          frames      : list of (H, W, 3) uint8 BGR frames, replayed in order.
+          temporal_on : bool — whether the TemporalState (partition reuse, sticky
+                        labels, render cache) is active for this sequence.
+        Output:
+          records     : list of one dict per frame, each holding that frame's
+                        stage timings, the labels/canvas actually emitted, and
+                        the palette state. Semantics: `records[i]` corresponds to
+                        `frames[i]`; callers diff consecutive entries to measure
+                        churn. No array is returned.
+        """
         cv2.setRNGSeed(0)
         pal_state = PaletteState(cfg.palette_refresh)
         tstate = TemporalState(cfg.temporal and temporal_on, cfg.reuse_thresh,
@@ -314,6 +334,21 @@ def check_temporal(identical, noisy, cfg, reps):
 
 
 def main():
+    """Run the Task 4 verification suite and the optional paired benchmark.
+
+    Function: parses CLI flags, runs every correctness assertion (partition
+    equivalence, vertex-exact triangles, zero-pixel render diff, palette cache
+    cadence, row-run means bit-identity, end-to-end old/new diff, temporal
+    coherence), and with `--reps N` also prints the paired old/new stage
+    timings. Exits non-zero if any assertion fails.
+
+    Shapes
+    ------
+    Input: CLI flags only (`--reps`, `--quick`, `--verbose`). Output: assertion
+    and timing lines on stdout; no arrays are returned. Semantics: the synthetic
+    frames are (640, 480, 3) uint8 BGR, so the numbers describe that resolution
+    and camera config rather than any specific camera.
+    """
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--reps", type=int, default=5, help="benchmark repetitions")
     p.add_argument("--quick", action="store_true",
