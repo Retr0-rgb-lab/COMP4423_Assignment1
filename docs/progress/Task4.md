@@ -1179,6 +1179,80 @@ the next step.
   an AI recommendation that was measured, rendered, and still overruled by the
   human eye.
 
+## Code-correctness pass (post-review, 2026-09-24)
+
+A review pass over the whole `code/` tree found real defects rather than only
+style issues. Everything below was fixed and verified; the point of recording it
+here is that two of the fixes changed behaviour that earlier text in this file
+describes.
+
+### Correctness defects fixed
+
+- **Colour-only scene changes were invisible (the one that mattered).**
+  `TemporalState.signature` compared a mean-subtracted grey signature, so a
+  frame that changed colour without changing structure scored ~0 and
+  `freeze_colour_on_reuse` returned the previous canvas. The signature now
+  appends two Lab chroma means (scaled by `CHROMA_REPEAT = 128`). Measured on
+  `snap_000.png` against a `reuse_thresh` of 1.0: a green cast scores 5.71 and a
+  cool-to-warm cast 2.74, both breaking reuse as intended, while sensor noise
+  (sigma = 2) scores 0.50 and still reuses. This supersedes the "assumes the
+  camera exposure is stable" framing in the `freeze_colour_on_reuse` docs.
+- **K-Means crashed when triangles < colours.** `cv2.kmeans` requires N >= K, so
+  a small image yielding fewer triangles than the requested palette raised.
+  `quantize_kmeans` and `palette_kmeans_warm` now clamp to `min(k, T)`. OpenCV
+  also collapses its centre array to a scalar at K=1, so that case is computed
+  directly instead of being reshaped.
+- **`multi_scale_ssim` returned NaN** for images too small to admit any SSIM
+  window (`np.mean([])`). Now returns 0.0.
+- **`n_samples=0` divided by zero** in `means_by_sampling`; now raises.
+- **An unknown `cfg.partition` silently ran region-merge** in both
+  `render_frame` and `task3_best.run`, so a typo would relabel an experiment.
+  Both now raise.
+- **Changing K mid-session corrupted the warm start.** `PaletteState` warmed
+  from a differently-sized palette; it now cold-builds when K changes.
+- **SSE could go slightly negative** in `brick_region_merge` through float
+  cancellation; clamped at 0. Verified not to change any recorded result
+  (the region-merge row of the Task 3 sweep reproduces exactly).
+- `_region_mse` took a per-column mean for 2-D input instead of one scalar mean
+  over the whole region; `_region_sobel_var` crashed on 1- and 5-channel input;
+  both partitioners consumed a one-shot `S_set` iterator in `max()` before
+  `min()`; `powers_of_two_upto` never checked that `smin` is a power of two.
+- `capture.py` had no `--no-show`, so `cv2.waitKey(0)` hung forever headless.
+
+### Docstring accuracy
+
+37 docstrings made claims contradicted by their own code — the worst were
+`render_frame` documented as returning two values when it returns three, and
+`StageTimer.reset` documented as keeping stage names when it clears them. All
+corrected. Development-log narrative was also removed from module docstrings
+(AGENTS 5.3/5.8): measured speedups, "before this module existed" history, and
+chosen-configuration results now live here and in `Task3.md` rather than in
+source comments.
+
+`task3_marginal.py` duplicates the shipped quadtree loop to record split
+history. It now asserts its final leaf set equals `brick_quadtree`'s at the
+assignment budget, so the copy cannot silently drift (currently 4995 cells,
+matching).
+
+### Reproducibility defect found in the Task 3 sweep
+
+`triangle_brick_task3.py` never calls `cv2.setRNGSeed`, so 13 of its 15 rows are
+single unseeded K-Means draws. Measured, not assumed: three consecutive runs of
+one fixed configuration gave ΔE2000 = 10.25 / 9.93 / 9.81 (spread 0.44), and
+eight palette builds on frozen geometry returned eight distinct palettes. The
+geometry is deterministic; only the palette moves.
+
+Consequence for the report: Table 3 comparisons with a ΔE gap below ~0.4 cannot
+carry a conclusion. The K sweep (2.34), the S_max structure gain (SSIM spread
+only ~0.007), the priority verdict (Edge F1 0.213 vs 0.320) and the
+quadtree-vs-region-merge structure gap are all far outside it. The S_max colour
+trade-off, the 64-vs-128 comparison, and the priority colour-side scores are
+inside it, so those were re-grounded on the deterministic Median-Cut sweep
+(`smax_curve.png`, ΔE 10.61 → 11.77) and on the seeded `task3_best.py`
+comparison. `task3_best.py` does seed, so the chosen configuration's numbers
+(ΔE 8.951, SSIM 0.3587, Edge F1 0.3455) are reproducible and were unchanged by
+this pass.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
@@ -1189,3 +1263,6 @@ the next step.
   "flicker reduction" is expected to become its own Level 4 item.
 - Nothing in this file is measured on a second machine; the numbers are from one
   Windows box and one camera.
+- The Task 3 sweep driver is still unseeded. The report now discloses the
+  resulting ~0.4 ΔE2000 noise floor rather than hiding it, but seeding the sweep
+  and re-recording all 15 rows would make every comparison reproducible.

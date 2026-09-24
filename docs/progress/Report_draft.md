@@ -239,6 +239,31 @@ Sobel once globally and gives values that differ near region edges (median ~2x
 relative difference), so this exact row is not reproducible from the shipped
 code; the verdict below is robust under both implementations.)*
 
+**Noise audit — which of these rows can carry a conclusion.** Thirteen of the
+fifteen rows use K-Means-Lab, and that sweep driver never seeds OpenCV's RNG, so
+each row is a single unseeded draw. I measured the resulting spread instead of
+assuming it: three consecutive runs of one fixed configuration returned ΔE2000 =
+10.25 / 9.93 / 9.81, and eight palette builds on *frozen* geometry returned
+eight distinct palettes. The geometry is deterministic; only the palette
+moves. Taking ~0.4 ΔE2000 as the noise floor, Table 3 separates into two groups:
+
+* **Load-bearing (gap far exceeds the noise):** the K sweep, 11.08 → 8.74
+  (spread 2.34); the S_max structure gain, SSIM 0.359 → 0.421 and Edge F1 0.295
+  → 0.377 (SSIM's own run-to-run spread is only ~0.007, so this gap is ~10x
+  noise); the priority verdict, Edge F1 0.213 vs 0.320 and EPI −0.020 vs +0.050;
+  and the quadtree-vs-region-merge structure gap.
+* **Not load-bearing (inside the noise, so I do not rest a conclusion on it):**
+  the ΔE2000 side of the S_max trade-off (9.95 vs 10.21, gap 0.26 < 0.4); the
+  S_max 64-vs-128 comparison, where every metric differs by less than 0.01; and
+  the colour-side scores in the priority comparison (ΔE 9.83 vs 10.22, Quant
+  Error 6.45 vs 7.33).
+
+Where a conclusion needed the colour side, I re-ran it with a deterministic
+Median-Cut palette — that is exactly what Section 5.4 does, and there the
+ΔE2000 gap is 10.61 → 11.77 (spread 1.16), well outside the K-Means noise. The
+quadtree-vs-region-merge colour verdict in Section 5.6 is likewise taken from
+the *seeded* Table 7, not from this sweep.
+
 Key findings (all on the single test image `sky.jpg`):
 
 > **Tying back to Task 2's motivation.** Section 4.2 reported a negative EPI
@@ -252,12 +277,11 @@ Key findings (all on the single test image `sky.jpg`):
 
 Larger K monotonically improves colour error. From K=4 to K=16, ΔE2000 moves from 11.08 to 8.74 and Quant from 9.25 to 5.62, at a small structure cost (SSIM 0.384 to 0.360). **K=16** minimises colour error, but the best SSIM and EPI of the K sweep both belong to K=4 (0.384 and 0.064), so the chosen config is a balanced compromise.
 
-Raising S_max from 32 to 64 was the largest structure and edge win of the sweep: SSIM moved from 0.359 to 0.421, MS-SSIM from 0.520 to 0.555, Edge F1 from 0.295 to 0.377, and EPI from 0.046 to 0.109 (more than doubled), offset by a ΔE2000 regression of +2.6%. A coarser start grid leaves more budget for the deep splits where detail matters. Going to S_max=128 adds little over 64 (SSIM 0.423 vs 0.421, ΔE2000 10.14 vs
-10.21, Edge F1 0.378 vs 0.377) and ends two triangles under budget at 9,988. I examine the colour side of this trade-off in Section 5.4.
+Raising S_max from 32 to 64 was the largest structure and edge win of the sweep: SSIM moved from 0.359 to 0.421, MS-SSIM from 0.520 to 0.555, Edge F1 from 0.295 to 0.377, and EPI from 0.046 to 0.109 (more than doubled). A coarser start grid leaves more budget for the deep splits where detail matters. The matching ΔE2000 move is 9.95 → 10.21, a +2.6% regression, but that particular gap is smaller than this sweep's ~0.4 noise floor, so I treat the colour side as unresolved here and establish it deterministically in Section 5.4 instead. Going to S_max=128 changes every metric by less than 0.01 against 64 (SSIM 0.423 vs 0.421, Edge F1 0.378 vs 0.377) and ends two triangles under budget at 9,988; those differences are inside the noise, so the defensible statement is only that 128 buys nothing measurable over 64.
 
-ΔMSE priority is the better choice on the edge-alignment metrics. The Sobel version is the only negative-EPI run of the grid (-0.020) and has by far the worst Edge F1 (0.213 against 0.320), which is the failure that matters here because it means the triangle boundaries stopped following image structure. Sobel does lead on several colour-side scores (ΔE2000 9.83 vs 10.22, Quant Error 6.45 vs 7.33, SSIM 0.374 vs 0.370), so the split is not one-sided; the argument for ΔMSE rests on the edge-alignment result, not on a clean sweep. Edge-density allocation over-exploits high-gradient pixels without aligning boundaries to real edges, and the measurements largely rejected this otherwise plausible-sounding suggestion.
+ΔMSE priority is the better choice on the edge-alignment metrics. The Sobel version is the only negative-EPI run of the grid (-0.020) and has by far the worst Edge F1 (0.213 against 0.320), which is the failure that matters here because it means the triangle boundaries stopped following image structure. Both of those gaps are far outside the noise floor, and they are what the choice rests on. Sobel does lead on several colour-side scores (ΔE2000 9.83 vs 10.22, Quant Error 6.45 vs 7.33, SSIM 0.374 vs 0.370), but those gaps sit inside the noise, so the honest summary is that edge-density allocation over-exploits high-gradient pixels without aligning boundaries to real edges, with no measurable colour-side benefit. The measurements largely rejected this otherwise plausible-sounding suggestion.
 
-Comparing quadtree against region-merge, the quadtree wins on structure (SSIM, EPI) while region-merge wins on colour (ΔE2000, Quant). Region-merge collapses to only {16,32} cells, while the quadtree keeps a {4,8,16,32} mix.
+Comparing quadtree against region-merge, the quadtree wins on structure (SSIM 0.359 vs 0.332, EPI +0.046 vs +0.019) while region-merge leads on the colour columns (ΔE2000 9.59 vs 9.95). The structure gap is well outside the noise; the colour gap of 0.36 is not, so I take that verdict from the seeded comparison in Section 5.6 instead. Either way the mechanism is the same and is not in doubt: region-merge collapses to only {16,32} cells, while the quadtree keeps a {4,8,16,32} mix.
 
 ![Fig. 5. All 15 Task 3 runs, per-metric bar chart (normalised and absolute
 scales). The sweep variables (K, S_min, S_max, partition, palette, priority) are
@@ -348,11 +372,15 @@ Metrics (9,990 triangles, `sky.jpg`):
 `task3_best.py` with `cv2.setRNGSeed(0)`; these JSON files are the single
 source of truth for the chosen config. The same configuration appears in three
 places in this report with slightly different ΔE2000 values — 8.74 (Section
-4.2 A:k16, unseeded sweep), 8.95 (this table, seeded), 9.03
+5.2 A:k16, unseeded sweep), 8.95 (this table, seeded), 9.03
 (`docs/progress/Task3.md` §10, earlier run). All three are "the same
-configuration" under K-Means-Lab's declared run-to-run non-reproducibility; the
-~0.3 spread is the noise floor of that variance, and the conclusion is
-unaffected: quadtree ≈ region_merge on colour, far better on structure.)*
+configuration" measured under K-Means-Lab's run-to-run non-reproducibility,
+which I quantified rather than assumed: re-running one fixed configuration three
+times gave ΔE2000 = 10.25 / 9.93 / 9.81, a spread of 0.44, and building the
+K=8 palette eight times on frozen geometry returned eight distinct palettes.
+The noise floor is therefore ~0.4 ΔE2000. The conclusion is unaffected,
+because it rests on the structure gap (Edge F1 0.346 vs 0.298, EPI +0.045 vs
++0.015), which is 3-10x the colour spread — see Section 5.2's noise audit.)*
 
 I also ran a border-free ablation. All numbers above (and in Sections 4-5) include the 1-px gray border, which on the chosen Task 3 render is the single most common colour (11.6% of pixels) and therefore a large, constant error term. Re-running the chosen config with the border *not drawn* gives markedly better metrics: PSNR 23.35 dB, SSIM 0.571, ΔE2000 6.83, Edge F1 0.507, EPI +0.274 (same partition, same palette, same labels). The border is a large and unevenly distributed penalty: PSNR rises by 5.8 dB and EPI roughly sixfold when it is removed, while quantisation error does not move at all, because that metric never looks at the rendered image. Because every compared run carries the same border, the *comparisons* and rankings in this report are unaffected. The borderless render is what the task's "boundaries are not brick colours" clause implies as the colour-only metric, and I keep the bordered numbers as primary because they are the actual delivered output.
 
@@ -789,8 +817,14 @@ Task 3 made the geometry adaptive (RDO quadtree) and the palette multi-colour
 (K-Means-Lab). A 15-run sweep plus a rate-distortion study on `sky.jpg` showed
 where the budget is best spent: K=16, S_max=32 as the balanced setting, ΔMSE
 priority, quadtree. The S_max=32-vs-64 result I present as a two-sided
-trade-off rather than a single winner, because the sweep is single-image
-evidence and a strong-hue scene may shift the palette-method and K rankings.
+trade-off rather than a single winner, for two reasons: the sweep is
+single-image evidence, and a strong-hue scene may shift the palette-method and
+K rankings; and the sweep driver never seeds OpenCV's RNG, so I measured its
+run-to-run ΔE2000 spread at ~0.4 and re-grounded every comparison whose gap was
+smaller than that on a deterministic palette or a seeded run (Section 5.2). The
+conclusions I do state — larger K helps colour, ΔMSE beats edge-density on edge
+alignment, a coarse S_max buys structure — all rest on gaps several times that
+floor.
 
 In Task 4 I turned the pipeline into a live camera loop and dealt with the
 real-world problems the offline tasks never exercised: an O(T·H·W) mean stage

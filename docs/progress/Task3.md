@@ -404,6 +404,35 @@ and `code/pics/task3/summary/` (CSV + bar chart). Per-run files:
 
 ## 8. Known limitations / TODOs
 
+- **The sweep is not reproducible (found 2026-09-24, after the numbers were
+  recorded).** `triangle_brick_task3.py` never calls `cv2.setRNGSeed`, so 13 of
+  its 15 rows are single unseeded K-Means-Lab draws. Measured spread: three
+  consecutive runs of one fixed configuration gave ΔE2000 = 10.25 / 9.93 / 9.81
+  (spread 0.44), and eight palette builds on frozen geometry returned eight
+  distinct palettes. The geometry is deterministic; only the palette moves.
+
+  Which recorded comparisons survive that floor, and which do not:
+
+  | comparison | gap | inside ~0.4 noise? |
+  | --- | --- | --- |
+  | K sweep, K=4 → 16 (ΔE 11.08 → 8.74) | 2.34 | no — load-bearing |
+  | S_max 32 → 64, structure (SSIM 0.359 → 0.421) | 0.062 vs ~0.007 SSIM noise | no — load-bearing |
+  | priority, Edge F1 0.320 vs 0.213 | 0.107 | no — load-bearing |
+  | quadtree vs region_merge, structure (EPI +0.046 vs +0.019) | 0.027 | no — load-bearing |
+  | S_max 32 → 64 colour (ΔE 9.95 → 10.21) | 0.26 | **yes** — not usable |
+  | S_max 64 vs 128 (all metrics) | < 0.01 | **yes** — not usable |
+  | priority colour side (ΔE 10.22 vs 9.83) | 0.39 | **yes** — not usable |
+  | quadtree vs region_merge colour (ΔE 9.95 vs 9.59) | 0.36 | **yes** — not usable |
+
+  The four non-usable comparisons were re-grounded elsewhere: the S_max colour
+  trade-off on the deterministic Median-Cut sweep (`smax_curve.png`, ΔE 10.61 →
+  11.77, gap 1.16), and the quadtree-vs-region-merge colour verdict on the
+  *seeded* `task3_best.py` run (8.95 vs 8.63). The chosen configuration is
+  unaffected because `task3_best.py` does seed.
+
+  Fix, not taken: seeding the sweep would make all 15 rows reproducible but
+  would require re-recording every Task 3 table and figure. The report instead
+  discloses the floor in Section 5.2's noise audit.
 - **PSNR/ΔE slightly worse than the non-splitting version** — expected: the
   adaptive tiling trades pixel fidelity for edge alignment. Report should
   present both metrics, not just the favorable ones.
