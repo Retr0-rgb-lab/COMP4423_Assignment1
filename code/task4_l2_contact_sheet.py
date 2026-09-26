@@ -2,8 +2,8 @@
 task4_l2_contact_sheet — build the Task 4 Level-2 scene contact sheet.
 
 Task 4 requires testing on images of different content. Seven camera snapshots
-live in `code/pics/task4/snap_000.png` .. `snap_006.png` (face, keyboard,
-low-light lamp, backlit lamp, backlit curtain, wall). The report needs them
+live in `code/pics/task4/snap_000.png` .. `snap_006.png` (two portraits,
+keyboard, luggage, low-light lamp, backlit curtain, wall). The report needs them
 side by side so the "different content" claim is visible in one figure.
 
 This driver tiles the seven existing PNGs into a single labelled sheet and
@@ -24,9 +24,12 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 SNAPS = [os.path.join(HERE, "pics", "task4", f"snap_{i:03d}.png") for i in range(7)]
 OUT = os.path.join(HERE, "pics", "task4", "L2_contact_sheet.png")
-LABELS = ["face, cool indoor light", "face, second exposure",
-          "keyboard, strong texture", "low-light desk lamp",
-          "backlit lamp, high dynamic range", "curtain against window light",
+# One label per snapshot, in snap_000..snap_006 order. Each names the subject
+# first and the lighting condition second, because the lighting is what varies
+# the algorithm's behaviour (temporal reuse in particular depends on it).
+LABELS = ["portrait, front light + flat wall", "portrait, backlit through sheer curtain",
+          "mechanical keyboard, hard texture", "luggage, saturated colour + depth",
+          "low-light desk lamp, high dynamic range", "curtain against window light",
           "wall + switch, near-overexposed"]
 GAP, CAP, COLS = 12, 34, 3
 
