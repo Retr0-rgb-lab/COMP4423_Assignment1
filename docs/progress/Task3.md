@@ -405,7 +405,7 @@ and `code/pics/task3/summary/` (CSV + bar chart). Per-run files:
 ## 8. Known limitations / TODOs
 
 - **The sweep is not reproducible (found 2026-09-24, after the numbers were
-  recorded).** `triangle_brick_task3.py` never calls `cv2.setRNGSeed`, so 13 of
+  recorded).** `triangle_brick_task3.py` never calls `cv2.setRNGSeed`, so 14 of
   its 15 rows are single unseeded K-Means-Lab draws. Measured spread: three
   consecutive runs of one fixed configuration gave ΔE2000 = 10.25 / 9.93 / 9.81
   (spread 0.44), and eight palette builds on frozen geometry returned eight
@@ -431,7 +431,7 @@ and `code/pics/task3/summary/` (CSV + bar chart). Per-run files:
   unaffected because `task3_best.py` does seed.
 
   Fix, not taken: seeding the sweep would make all 15 rows reproducible but
-  would require re-recording every Task 3 table and figure. The report instead
+  would require re- and figure. The report instead
   discloses the floor in Section 5.2's noise audit.
 - **PSNR/ΔE slightly worse than the non-splitting version** — expected: the
   adaptive tiling trades pixel fidelity for edge alignment. Report should
@@ -509,8 +509,8 @@ Concrete instances in this task:
   ΔE2000 — the only perceptual-colour metric in the suite — pointed the other
   way.
 - Only after the author pushed back ("32 looks better to my eye") did the AI
-  break ΔE down by region and find the **shadow area is ~44% worse under
-  64** (7.61 vs 11.00). That analysis was computable from the start; it was
+  break ΔE down by region and find the **shadow set gets materially worse
+  under 64**. That analysis was computable from the start; it was
   not offered because it contradicted the headline the AI had already written.
 
 ### 9.3 Bias 3 — reporting metric verdicts as if they were perceptual verdicts

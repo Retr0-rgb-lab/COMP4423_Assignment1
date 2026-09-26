@@ -79,13 +79,19 @@ would have made a mean-based table look like a uniformly slower stage.
 
 Per triangle it does `mask[:] = 0` (H×W) then `cv2.mean(img, mask=mask)` (H×W),
 so the cost is **O(T · H · W)** — every primitive scans the whole frame. The
-measured per-triangle cost scales with image area, which is the signature:
+measured per-triangle cost scales with image area, which is the signature
+(re-measured 2026-09-26; the earlier ms column for the largest frame was
+transcribed wrong, the per-triangle column is the reliable one):
 
-| Frame | Triangles | `triangle_means` | per triangle |
-|---|---|---|---|
-| 1279×1706 | 9990 | 2830 ms | 995 µs |
-| 640×480 | 9990 | 1573 ms | 157 µs |
-| 320×240 | 9988 | 421 ms | 41 µs |
+| Frame | Triangles | `triangle_means` | per triangle | area |
+| --- | --- | --- | --- | --- |
+| 1279×1706 | 9990 | 9025 ms | 903 µs | 2,181,974 px |
+| 640×480 | 9990 | 1429 ms | 143 µs | 307,200 px |
+| 320×240 | 9988 | 393 ms | 39 µs | 76,800 px |
+
+The area ratios (7.1x and 4.0x) track the per-triangle ratios (6.3x and 3.6x),
+which is the O(T·H·W) prediction. The 640x480 row is the one that matters for
+the live loop, and it is the 1,573 ms quoted in the Step 3 bottleneck table.
 
 The second bottleneck, `quadtree_partition`, has the same shape of defect: it
 recomputes a numpy region mean for every split candidate. Note that
@@ -550,7 +556,7 @@ flowchart TD
 
 | stage | ms | share | root cause |
 |---|---|---|---|
-| partition | ~107 | ~50% | ~4695 greedy splits, each = one 5-square SAT batch + 4 heap pushes; the cost is the numpy-call count, not arithmetic (the same lesson as the earlier "O(1) but not batched" finding) |
+| partition | ~107 | ~50% | 1,565 greedy splits, each adding 3 net cells (4,695 cells onto the 300-cell start grid) and costing one 5-square SAT batch + 4 heap pushes; the cost is the numpy-call count, not arithmetic (the same lesson as the earlier "O(1) but not batched" finding) |
 | render | ~55 | ~25% | 2 cv2 calls per triangle = ~20000 Python-to-cv2 crossings |
 | means | ~21 | ~10% | sum(s^2/2) ~ 2730 small gathers (the size-32 half alone is 512 offsets) |
 | palette | ~23 | ~10% | per-frame cv2.kmeans x10 restarts; also the recorded flicker defect |
@@ -1236,7 +1242,7 @@ matching).
 
 ### Reproducibility defect found in the Task 3 sweep
 
-`triangle_brick_task3.py` never calls `cv2.setRNGSeed`, so 13 of its 15 rows are
+`triangle_brick_task3.py` never calls `cv2.setRNGSeed`, so 14 of its 15 rows are
 single unseeded K-Means draws. Measured, not assumed: three consecutive runs of
 one fixed configuration gave ΔE2000 = 10.25 / 9.93 / 9.81 (spread 0.44), and
 eight palette builds on frozen geometry returned eight distinct palettes. The

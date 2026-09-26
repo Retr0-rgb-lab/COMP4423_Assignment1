@@ -11,6 +11,17 @@ of at most 10,000 individual right-isosceles triangles, with no gaps or
 overlaps, where each brick carries one uniform face colour determined from the
 image region it covers. Multiple brick sizes and multiple colours are allowed.
 
+The no-gaps/no-overlaps rule is a hard constraint, so I did not want to rest it
+on the construction argument alone. `code/verify_coverage.py` checks it
+directly for all three delivered tessellations: cells are distinct and
+grid-aligned, each cell's two triangles satisfy the exact area identity
+`area(a) + area(b) == s²` (shoelace on the vertices), and rasterising the
+triangles leaves **0 uncovered pixels** in the delivered crop. The test is
+geometric rather than a rasterised multiplicity count because `cv2.fillPoly`
+paints a one-pixel fringe along every internal diagonal — a rasterisation
+convention, not an area overlap, and one I quantify separately in Section 4.3.
+All three pass.
+
 Because the budget is fixed, the real work is deciding where the detail should
 go. More triangles capture more edges and texture, but they also make each
 brick's colour estimate noisier (a tiny triangle averages very few pixels, so
@@ -31,7 +42,7 @@ become the main engineering work.
 **Test image.** `code/pics/sky.jpg` (1706x1279) is a cityscape — canal, brick
 wall, trees, distant buildings — not sky/cloud content. Its dominant signal is
 luminance variation rather than hue variation, which has a measurable effect on
-the colour-quantisation experiments (Sections 3 and 4).
+the colour-quantisation experiments (Sections 4 and 5).
 
 ![Fig. 1. The shared test image `code/pics/sky.jpg` (1706x1279): a canal-side
 cityscape with brick architecture, trees and distant buildings.](code/pics/sky.jpg)
@@ -53,7 +64,18 @@ turned out to be wrong for the report: the assignment asks for camera capture
 in Task 1 specifically, so deferring it would have left that requirement
 unmet. The script now opens the camera by default, with the file read kept
 only as a fallback for a machine with no webcam, and as an explicit
-`--from-file` option for testing the display path without hardware.
+`--from-file` option for testing the display path without hardware. Because a
+displayed window leaves no artefact, `--save PATH` additionally writes the
+captured frame to disk, so the deliverable is verifiable after the fact:
+
+    python code\capture.py --save code\pics\task1_capture.png
+
+![Task 1 output. The frame written by `code/capture.py --save`, read back from
+`code/pics/task1_capture.png` (the shared `sky.jpg` test image, so the artefact
+is byte-reproducible). The interactive `imshow`/`waitKey` path was exercised on
+the same machine; this file is the persisted result of the capture half,
+reproduced through the `--from-file` fallback so it could be regenerated
+headless for the report.](code/pics/task1_capture.png)
 
 The second detail is the camera handle. `cap.release()` has to run even when
 `cap.read()` fails, because on Windows a `VideoCapture` left open holds the
@@ -78,14 +100,14 @@ the one thing each task changes. Table 1 summarises them.
 
 | Component             | Choice                                                                                                                                                                                                                                                                                                                                                                        | Rationale                                                                                                                                |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Brick geometry        | Square cell cut by**one diagonal**, direction alternates by checkerboard parity                                                                                                                                                                                                                                                                                         | Guarantees right-isosceles, gap-free, overlap-free tiling; alternation avoids a visible single-directional smear                         |
+| Brick geometry        | Square cell cut by **one diagonal**, direction alternates by checkerboard parity                                                                                                                                                                                                                                                                                         | Guarantees right-isosceles, gap-free, overlap-free tiling; alternation avoids a visible single-directional smear                         |
 | Brick size            | Length of the equal legs, in base-grid units; Task 2 fixed, Task 3 power-of-two sizes {1,2,4,8,16,32,…}                                                                                                                                                                                                                                                                      | PDF definition; powers of two make quadtree halving exact                                                                                |
 | Colour per brick      | Mean BGR of the pixels under the triangle's mask (`cv2.fillPoly` + `cv2.mean`)                                                                                                                                                                                                                                                                                            | Robust to sub-region detail; the PDF asks colour be determined from the region covered                                                   |
 | Palette (Task 2)      | **Multi-Otsu on BT.601 luminance** (primary), K-Means K=3 and a fixed 33%/67% percentile split as baselines                                                                                                                                                                                                                                                             | Otsu thresholds adapt to the scene histogram; baselines make the results section a real comparison                                       |
 | Palette (Task 3)      | **K-Means on CIE-Lab** (K=8/16), Median-Cut as baseline                                                                                                                                                                                                                                                                                                                 | Lab is perceptually uniform; median cut is cheap and deterministic                                                                       |
 | Tessellation (Task 3) | **Top-down RDO quadtree**, split priority ΔMSE per triangle (ΔSSE/6); region-merge as dual algorithm                                                                                                                                                                                                                                                                  | Rate–distortion allocation: equal per-triangle units make different sizes comparable                                                    |
-| Border                | 1-px`#3C3C3C` polyline per triangle                                                                                                                                                                                                                                                                                                                                         | Visual separation; PDF permits drawn boundaries, not counted as brick colours                                                            |
-| Metrics               | 10-item metric suite (9 quality + 1 constraint): PSNR, SSIM, MS-SSIM (4-level mean, a practical variant of Wang et al. multi-scale SSIM), ΔE2000 (CIEDE2000), Edge F1/Precision/Recall (Canny + 3-px tolerance),**edge-alignment correlation (EAC; Pearson correlation of Sobel responses — labelled "EPI" below for short)**, Quantisation Error, Budget Utilisation | Each metric catches a different failure mode; the EAC/EPI metric specifically measures whether triangle boundaries align with real edges |
+| Border                | 1-px `#3C3C3C` polyline per triangle                                                                                                                                                                                                                                                                                                                                         | Visual separation; PDF permits drawn boundaries, not counted as brick colours                                                            |
+| Metrics               | 10-item metric suite (9 quality + 1 constraint): PSNR, SSIM, MS-SSIM (4-level mean, a practical variant of Wang et al. multi-scale SSIM), ΔE2000 (CIEDE2000), Edge F1/Precision/Recall (Canny + 3-px tolerance), **edge-alignment correlation (EAC; Pearson correlation of Sobel responses — labelled "EPI" below for short)**, Quantisation Error, Budget Utilisation | Each metric catches a different failure mode; the EAC/EPI metric specifically measures whether triangle boundaries align with real edges |
 
 **Budget semantics.** The limit is 10,000 *triangles* ("bricks"); a quadtree
 leaf cell produces 2 triangles, so a partition of 4,995 cells exhausts the
@@ -106,7 +128,7 @@ purpose.
 
 ## 4. Task 2 — equal-size triangles, 3 colours
 
-### 4.1 Design and testing
+### 4.1 Design and testing (Q1)
 
 The tessellation is a uniform SxS grid cut by checkerboard diagonals. The grid
 step is the smallest S for which `2·M·N <= 10000` (M=ceil(H/S), N=ceil(W/S)).
@@ -176,7 +198,7 @@ in tree foliage; `fixed` adds a bright error band across the water.](code/pics/t
 absolute scales). Otsu ≈ K-Means on colour/structure; `fixed` wins only the edge
 family.](code/pics/task2/out_task2_metrics_chart.png)
 
-### 4.3 Problems found and solved
+### 4.3 Problems found and solved (Q3)
 
 The first run produced only two triangles because `compute_grid` scanned S
 downward and returned the largest S that fit the budget, which for this image
@@ -203,7 +225,7 @@ to fixed thresholds comes up again in Section 7.
 
 ## 5. Task 3 — adaptive multi-size, multi-colour
 
-### 5.1 Design and testing
+### 5.1 Design and testing (Q1)
 
 I built on Task 2 by adding two adaptive pieces. The tessellation is now a **top-down RDO quadtree** that starts from a coarse grid and splits the highest-priority cell (ΔMSE/6) while budget remains, and the palette is now **K-Means-Lab** with K>3, with Median-Cut kept as a baseline. I dropped the Task 2 primary quantiser (Multi-Otsu) because Otsu is a 1-D luminance method that cannot produce more than a small number of threshold classes. Task 3 needs an arbitrary K-colour palette, so I replaced it with a general clustering method on the perceptually uniform Lab space.
 
@@ -240,29 +262,49 @@ relative difference), so this exact row is not reproducible from the shipped
 code; the verdict below is robust under both implementations.)*
 
 **Noise audit — which of these rows can carry a conclusion.** Thirteen of the
-fifteen rows use K-Means-Lab, and that sweep driver never seeds OpenCV's RNG, so
+fourteen of the fifteen rows use K-Means-Lab, and that sweep driver never seeds OpenCV's RNG, so
 each row is a single unseeded draw. I measured the resulting spread instead of
-assuming it: three consecutive runs of one fixed configuration returned ΔE2000 =
-10.25 / 9.93 / 9.81, and eight palette builds on *frozen* geometry returned
-eight distinct palettes. The geometry is deterministic; only the palette
-moves. Taking ~0.4 ΔE2000 as the noise floor, Table 3 separates into two groups:
+assuming it. Four consecutive runs of one fixed configuration (quadtree,
+S_set=[1..32], K=8, 9,990 triangles) returned:
 
-* **Load-bearing (gap far exceeds the noise):** the K sweep, 11.08 → 8.74
-  (spread 2.34); the S_max structure gain, SSIM 0.359 → 0.421 and Edge F1 0.295
-  → 0.377 (SSIM's own run-to-run spread is only ~0.007, so this gap is ~10x
-  noise); the priority verdict, Edge F1 0.213 vs 0.320 and EPI −0.020 vs +0.050;
-  and the quadtree-vs-region-merge structure gap.
-* **Not load-bearing (inside the noise, so I do not rest a conclusion on it):**
-  the ΔE2000 side of the S_max trade-off (9.95 vs 10.21, gap 0.26 < 0.4); the
-  S_max 64-vs-128 comparison, where every metric differs by less than 0.01; and
-  the colour-side scores in the priority comparison (ΔE 9.83 vs 10.22, Quant
-  Error 6.45 vs 7.33).
+| metric | run 1 | run 2 | run 3 | run 4 | spread |
+| --- | --- | --- | --- | --- | --- |
+| ΔE2000 | 10.2519 | 9.8111 | 9.9255 | 9.8406 | **0.441** |
+| SSIM | 0.36675 | 0.36030 | 0.36020 | 0.36405 | **0.0066** |
+| Edge F1 | 0.32247 | 0.30441 | 0.31731 | 0.29387 | **0.029** |
+| EPI | +0.04740 | +0.04555 | +0.04731 | +0.04762 | **0.0021** |
+| Quant Error | 7.30 | 7.76 | 7.38 | 7.46 | **0.178** |
 
-Where a conclusion needed the colour side, I re-ran it with a deterministic
-Median-Cut palette — that is exactly what Section 5.4 does, and there the
-ΔE2000 gap is 10.61 → 11.77 (spread 1.16), well outside the K-Means noise. The
-quadtree-vs-region-merge colour verdict in Section 5.6 is likewise taken from
-the *seeded* Table 7, not from this sweep.
+The geometry is deterministic across all four runs (identical 4,995-cell
+partition); only the palette moves, and eight palette builds on *frozen*
+geometry returned eight distinct palettes. So each metric has its own noise
+floor, and a gap only means something when it is large relative to *that
+metric's* floor. Comparing a ΔE2000 gap against an Edge F1 gap would not be
+valid, so the table below uses the matching floor:
+
+| comparison | metric | gap | floor | ratio | verdict |
+| --- | --- | --- | --- | --- | --- |
+| K sweep, K=4 → 16 | ΔE2000 | 2.340 | 0.441 | 5.3x | load-bearing |
+| S_max 32 → 64 | SSIM | 0.062 | 0.0066 | 9.5x | load-bearing |
+| S_max 32 → 64 | Edge F1 | 0.082 | 0.029 | 2.9x | load-bearing |
+| priority, ΔMSE → Sobel | EPI | 0.070 | 0.0021 | 34x | load-bearing |
+| priority, ΔMSE → Sobel | Edge F1 | 0.107 | 0.029 | 3.7x | load-bearing |
+| quadtree vs region-merge | EPI | 0.027 | 0.0021 | 13x | load-bearing |
+| quadtree vs region-merge | SSIM | 0.027 | 0.0066 | 4.1x | load-bearing |
+| palette, K-Means-Lab vs Median-Cut | ΔE2000 | 0.660 | 0.441 | 1.5x | **marginal — see below** |
+| S_max 32 → 64 | ΔE2000 | 0.260 | 0.441 | 0.6x | inside noise |
+| S_max 64 → 128 | ΔE2000 | 0.069 | 0.441 | 0.2x | inside noise |
+| priority, ΔMSE → Sobel | ΔE2000 | 0.390 | 0.441 | 0.9x | inside noise |
+
+So four of the comparisons I draw conclusions from clear their own metric's
+floor by 2.9x or better, and three do not. Where a conclusion needed the colour
+side, I re-ran it with a deterministic palette — that is what Section 5.4 does,
+and there the ΔE2000 gap is 10.61 → 11.77 (spread 1.16, 2.6x the floor). The
+quadtree-vs-region-merge colour verdict in Section 5.6 is taken from the *seeded*
+Table 7, which makes it reproducible, though at +0.32 it is still inside the
+colour floor; that decision rests on the structure gap instead, as Section 5.6
+states. The palette comparison is the interesting borderline case, and I treat
+it explicitly in Section 5.6 rather than claiming it as a win.
 
 Key findings (all on the single test image `sky.jpg`):
 
@@ -277,16 +319,18 @@ Key findings (all on the single test image `sky.jpg`):
 
 Larger K monotonically improves colour error. From K=4 to K=16, ΔE2000 moves from 11.08 to 8.74 and Quant from 9.25 to 5.62, at a small structure cost (SSIM 0.384 to 0.360). **K=16** minimises colour error, but the best SSIM and EPI of the K sweep both belong to K=4 (0.384 and 0.064), so the chosen config is a balanced compromise.
 
-Raising S_max from 32 to 64 was the largest structure and edge win of the sweep: SSIM moved from 0.359 to 0.421, MS-SSIM from 0.520 to 0.555, Edge F1 from 0.295 to 0.377, and EPI from 0.046 to 0.109 (more than doubled). A coarser start grid leaves more budget for the deep splits where detail matters. The matching ΔE2000 move is 9.95 → 10.21, a +2.6% regression, but that particular gap is smaller than this sweep's ~0.4 noise floor, so I treat the colour side as unresolved here and establish it deterministically in Section 5.4 instead. Going to S_max=128 changes every metric by less than 0.01 against 64 (SSIM 0.423 vs 0.421, Edge F1 0.378 vs 0.377) and ends two triangles under budget at 9,988; those differences are inside the noise, so the defensible statement is only that 128 buys nothing measurable over 64.
+Raising S_max from 32 to 64 was the largest structure and edge win of the sweep: SSIM moved from 0.359 to 0.421, MS-SSIM from 0.520 to 0.555, Edge F1 from 0.295 to 0.377, and EPI from 0.046 to 0.109 (more than doubled). A coarser start grid leaves more budget for the deep splits where detail matters. The matching ΔE2000 move is 9.95 → 10.21, a +2.6% regression, but that particular gap is smaller than this sweep's ~0.4 noise floor, so I treat the colour side as unresolved here and establish it deterministically in Section 5.4 instead. Going to S_max=128 changes every structural metric by less than 0.01 against 64 (SSIM 0.423 vs 0.421, Edge F1 0.378 vs 0.377) and ends two triangles under budget at 9,988; the colour-side columns move slightly more (ΔE2000 0.069, Quant Error 0.029, PSNR 0.014 dB) but all of those gaps are an order of magnitude inside the ~0.4 noise floor, so the defensible statement is only that 128 buys nothing measurable over 64.
 
 ΔMSE priority is the better choice on the edge-alignment metrics. The Sobel version is the only negative-EPI run of the grid (-0.020) and has by far the worst Edge F1 (0.213 against 0.320), which is the failure that matters here because it means the triangle boundaries stopped following image structure. Both of those gaps are far outside the noise floor, and they are what the choice rests on. Sobel does lead on several colour-side scores (ΔE2000 9.83 vs 10.22, Quant Error 6.45 vs 7.33, SSIM 0.374 vs 0.370), but those gaps sit inside the noise, so the honest summary is that edge-density allocation over-exploits high-gradient pixels without aligning boundaries to real edges, with no measurable colour-side benefit. The measurements largely rejected this otherwise plausible-sounding suggestion.
 
 Comparing quadtree against region-merge, the quadtree wins on structure (SSIM 0.359 vs 0.332, EPI +0.046 vs +0.019) while region-merge leads on the colour columns (ΔE2000 9.59 vs 9.95). The structure gap is well outside the noise; the colour gap of 0.36 is not, so I take that verdict from the seeded comparison in Section 5.6 instead. Either way the mechanism is the same and is not in doubt: region-merge collapses to only {16,32} cells, while the quadtree keeps a {4,8,16,32} mix.
 
-![Fig. 5. All 15 Task 3 runs, per-metric bar chart (normalised and absolute
-scales). The sweep variables (K, S_min, S_max, partition, palette, priority) are
-on the x-axis groups; the structural-vs-colour split is visible across the
-whole grid.](code/pics/task3/summary/metrics_chart.png)
+![Fig. 5. All 15 Task 3 runs as a per-metric bar chart. The x-axis of each
+panel carries the metrics (left: the four [0,1]-bounded scores; right: the
+absolute-scale ones), and the 15 runs are series within each group, identified
+by the legend, which is where the swept variable (K, S_set, partition, palette,
+priority) shows up. The structural-vs-colour split is visible across the whole
+grid.](code/pics/task3/summary/metrics_chart.png)
 
 ### 5.3 The marginal-benefit / rate-distortion study
 
@@ -322,22 +366,26 @@ The metric verdict that S_max=64 wins is only one side of the story. Breaking Δ
 | SSIM (higher better)    | 0.375           | 0.415 | 0.415 | 0.415 |
 | Edge F1 (higher better) | 0.322           | 0.403 | 0.402 | 0.402 |
 
-ΔE2000 is best at S_max=32 and worsens afterwards, then flattens out. SSIM, Edge F1, and EPI improve up to S_max=64 and then flatten. There is no single best S_max: 32 wins on large-area colour and 64 wins on structure and edges, and which one is "optimum" depends on how those two sides are weighted. The difference is visually stark in the shadow region. Under S_max=64 the shadow's mean ΔE is about 44% worse than under S_max=32 (11.00 vs 7.61, `code/pics/task3/analysis/crop_shadow.png`), while the sky region is barely affected (`crop_sky.png`). I chose a balanced configuration for this report (Section 5.6).
+ΔE2000 is best at S_max=32 and worsens afterwards, then flattens out. SSIM, Edge F1, and EPI improve up to S_max=64 and then flatten. There is no single best S_max: 32 wins on large-area colour and 64 wins on structure and edges, and which one is "optimum" depends on how those two sides are weighted. To test that claim rather than assert it, `code/task3_shadow_crop.py` splits the **source** image into two pixel sets by a luminance percentile (the darkest 40% and the remainder) and averages the per-pixel CIEDE2000 map over each, for both S_max values. Defining the split on the source rather than on either render is what makes the two comparable. Under S_max=64 the shadow set's mean ΔE rises from 8.37 to 10.90, **+30%**, while the bright set barely moves (12.11 to 12.35, **+2%**) — the degradation is concentrated in the dark regions, which is exactly where a ΔMSE priority has no variance left to split on. Both figures come from that script: `crop_shadow.png` and `crop_sky.png`, with the non-highlighted set dimmed so each figure shows its own pixels. I chose a balanced configuration for this report (Section 5.6).
 
 The mechanism behind the trade-off is that the RDO priority is ΔMSE, which scales with local variance. Edges get split and smooth regions are never split, so a whole large area ends up painted with one colour whose per-pixel error is small but whose *accumulated* perceptual error is large. ΔMSE cannot see large-area uniform drift, but the eye can.
 
 On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 5.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 7.4.
 
 ![Fig. 7. S_max sweep, two panels: perceptual colour error (ΔE2000, best at 32,
-then worsening and flat) versus structural metrics (SSIM / Edge F1 / EPI, rising
-to 64 then flat. ΔE2000 and SSIM/EdgeF1/EPI point in different directions — there is no
+then worsening and flat) versus structural metrics (SSIM / Edge F1 / EPI), rising
+to 64 then flat). ΔE2000 and SSIM/EdgeF1/EPI point in different directions — there is no
 single best S_max.](code/pics/task3/analysis/smax_curve.png)
 
-![Fig. 8. Cropped regions of the S_max=32 and S_max=64 renders against the
-original: the shadow/brick-wall crop shows the large-area colour drift under 64
-(mean ΔE 11.00 vs 7.61), while the sky crop is barely affected.](code/pics/task3/analysis/crop_shadow.png)
+![Fig. 8. The full frame under S_max=32 and S_max=64. The panels are
+pixel-aligned and the non-shadowed pixels are dimmed, so the left pair shows the
+source against the S_max=32 render and the right pair against the S_max=64
+render. Mean CIEDE2000 over the shadow set goes 8.37 → 10.90 (+30%) while the
+bright set moves 12.11 → 12.35 (+2%); the bright-set companion is
+`code/pics/task3/analysis/crop_sky.png`. Both figures are written by
+`code/task3_shadow_crop.py`.](code/pics/task3/analysis/crop_shadow.png)
 
-### 5.5 Problems found and solved
+### 5.5 Problems found and solved (Q3)
 
 The first problem was a quadtree inverted-loop bug that the AI introduced. The original code guarded `if n_tri <= budget: return` and looped `while n_tri > budget`, which reflected the wrong mental model: splitting *increases* the count, so the loop must run *while* budget remains. On `sky.jpg` the quadtree never split, using only 4,320 of 9,990 triangles. I fixed it to `while heap and n_tri + 6 <= budget`, and 945 splits then reach exactly 9,990 triangles and EPI turns positive (-0.043 to +0.049). I recorded this as an AI-introduced bug in Section 7.
 
@@ -353,10 +401,10 @@ I went with a balanced choice, near-best perceptual colour without throwing away
 | --------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | partition | **quadtree**        | keeps a {4,8,16,32} mix; near-best ΔE with much better structure than region_merge                                |
 | S_max     | **32**              | best ΔE2000; 64 improves structure but worsens large-area colour                                                  |
-| S_min     | 1                         | no-op on this image (the budget binds at size 4; §4.2 B-group); kept to allow fine cells where the budget permits |
+| S_min     | 1                         | no-op on this image (the budget binds at size 4; the B group in §5.2); kept to allow fine cells where the budget permits |
 | K         | **16**              | best ΔE2000 + quant error                                                                                         |
 | priority  | **mse** (ΔMSE / 6) | wins on the structure/edge metrics (see Section 5.2)                                                               |
-| palette   | **kmeans_lab**      | better ΔE than median_cut                                                                                         |
+| palette   | **kmeans_lab**      | wins the colour columns (ΔE2000, Quant Error, PSNR) but **loses all four structural ones** to median_cut, and its ΔE2000 edge is only 1.5x the noise floor — a genuine trade-off, resolved in favour of colour because that is the chosen config's headline claim; see 5.6 |
 
 Metrics (9,990 triangles, `sky.jpg`):
 
@@ -368,12 +416,28 @@ Metrics (9,990 triangles, `sky.jpg`):
 | region_merge S_max=32 K=16 kmeans_lab                | **8.63** | 0.339           | 17.59 | 0.298           | +0.015           |
 | region_merge S_max=32 K=16 median_cut                | 9.47           | 0.338           | 17.54 | 0.336           | +0.016           |
 
+The palette choice is the one setting where I am **not** claiming a clean win, so
+it is worth stating plainly. The D-group holds geometry fixed and varies only
+the palette, and on that comparison Median-Cut is *better* on every structural
+metric — SSIM 0.375 vs 0.359, MS-SSIM 0.526 vs 0.520, Edge F1 0.322 vs 0.295,
+EPI +0.052 vs +0.046 — while K-Means-Lab is better on the colour columns
+(ΔE2000 10.61 vs 9.95, Quant Error 7.76 vs 7.30, PSNR 17.17 vs 17.28). Only the
+ΔE2000 gap clears the noise at all, and it clears it by 1.5x, so on the
+perceptual-colour metric the two are close to indistinguishable. I chose
+K-Means-Lab because the chosen configuration's headline claim in this report is
+perceptual colour fidelity, and because a K-Means palette warm-started from a
+fixed seed is reproducible while remaining free to place centroids where the
+data actually sits — Median-Cut can only split axis-aligned boxes. But a reader
+who weights edge alignment or EPI above colour error should pick Median-Cut,
+and the evidence for that preference is at least as strong as the evidence
+against it. I would rather flag that than present a 1.5x margin as a result.
+
 *(Numbers from `code/pics/task3/best/*_metrics.json`, regenerated by
 `task3_best.py` with `cv2.setRNGSeed(0)`; these JSON files are the single
 source of truth for the chosen config. The same configuration appears in three
 places in this report with slightly different ΔE2000 values — 8.74 (Section
 5.2 A:k16, unseeded sweep), 8.95 (this table, seeded), 9.03
-(`docs/progress/Task3.md` §10, earlier run). All three are "the same
+(`docs/progress/Task3.md` §9, earlier run). All three are "the same
 configuration" measured under K-Means-Lab's run-to-run non-reproducibility,
 which I quantified rather than assumed: re-running one fixed configuration three
 times gave ΔE2000 = 10.25 / 9.93 / 9.81, a spread of 0.44, and building the
@@ -382,9 +446,11 @@ The noise floor is therefore ~0.4 ΔE2000. The conclusion is unaffected,
 because it rests on the structure gap (Edge F1 0.346 vs 0.298, EPI +0.045 vs
 +0.015), which is 3-10x the colour spread — see Section 5.2's noise audit.)*
 
-I also ran a border-free ablation. All numbers above (and in Sections 4-5) include the 1-px gray border, which on the chosen Task 3 render is the single most common colour (11.6% of pixels) and therefore a large, constant error term. Re-running the chosen config with the border *not drawn* gives markedly better metrics: PSNR 23.35 dB, SSIM 0.571, ΔE2000 6.83, Edge F1 0.507, EPI +0.274 (same partition, same palette, same labels). The border is a large and unevenly distributed penalty: PSNR rises by 5.8 dB and EPI roughly sixfold when it is removed, while quantisation error does not move at all, because that metric never looks at the rendered image. Because every compared run carries the same border, the *comparisons* and rankings in this report are unaffected. The borderless render is what the task's "boundaries are not brick colours" clause implies as the colour-only metric, and I keep the bordered numbers as primary because they are the actual delivered output.
+I also ran a border-free ablation, reproducible with `python code/task3_best.py --no-border`, which re-runs the chosen configuration with only the 1-px boundary pass suppressed — same partition, same palette, same labels. All numbers above (and in Sections 4-5) include that border, which on the chosen Task 3 render covers 11.6% of pixels — the third most common colour there, behind two flat-sky palette entries at 19.2% and 14.8%, and therefore a large, constant error term. With the border suppressed the metrics improve markedly: PSNR 23.35 dB, SSIM 0.571, ΔE2000 6.83, Edge F1 0.507, EPI +0.274. The border is a large and unevenly distributed penalty: PSNR rises by 5.79 dB and EPI by 6.0x when it is removed, while quantisation error does not move at all (5.7898 in both runs), because that metric never looks at the rendered image. Because every compared run carries the same border, the *comparisons* and rankings in this report are unaffected. The borderless render is what the task's "boundaries are not brick colours" clause implies as the colour-only metric, and I keep the bordered numbers as primary because they are the actual delivered output.
 
-Even though region_merge achieves the single-lowest ΔE of the grid (8.63), I did not pick it because it merges all fine cells away, leaving final sizes of only {16,32}. That gives it the worst structure score of the grid (Edge F1 0.298, EPI +0.015). The quadtree keeps a {4,8,16,32} mix and costs only +0.32 ΔE for a much better structure score. The comparison is reproducible: `task3_best.py` now writes per-config metrics JSON to `code/pics/task3/best/*_metrics.json`.
+Even though region_merge achieves the lowest ΔE of the three configurations in Table 7 (8.63), I did not pick it because it merges all fine cells away, leaving final sizes of only {16,32}. That gives it the worst structure score of those three (Edge F1 0.298, EPI +0.015). Across the whole 15-run sweep one row is worse on Edge F1 — the Sobel-priority run at 0.213, discussed in Section 5.2 — but that run fails on edge alignment rather than on cell-size coverage, which is the property being compared here. The quadtree keeps a {4,8,16,32} mix and costs +0.32 ΔE against region_merge for a much better structure score. The comparison is reproducible: `task3_best.py` seeds OpenCV's RNG and writes per-config metrics JSON to `code/pics/task3/best/*_metrics.json`.
+
+One caveat on that +0.32: seeding makes it reproducible, but 0.32 is still below the ~0.4 ΔE2000 noise floor measured in Section 5.2, so on colour alone the two are not separated by this experiment. The decision rests on the structure gap (Edge F1 +0.048, EPI +0.030), which is reproducible because it is a property of the cell-size distribution rather than of a particular K-Means local optimum.
 
 ![Fig. 9. The chosen configuration against its two region-merge rivals (original
 
@@ -397,7 +463,7 @@ detail and large bricks on flat regions.](code/pics/task3/summary/best_vs_task2.
 
 ### 5.7 Brick-size summary
 
-The PDF asks Task 3 to output, besides the rendered image, a brick summary with the total number of bricks and the count for each brick size. The chosen configuration from Section 5.6 produces the following partition, saved at `code/pics/task3/summary/brick_size_counts.json`.
+The PDF asks Task 3 to output, besides the rendered image, a brick summary with the total number of bricks and the count for each brick size. The chosen configuration from Section 5.6 produces the following partition, written by `code/task3_best.py` to `code/pics/task3/summary/brick_size_counts.json`.
 
 **Table 8. Brick-size summary of the chosen configuration (Task 3 deliverable).**
 
@@ -432,9 +498,10 @@ Full-quality config (quadtree, S_set=[1..32], K=16, kmeans_lab, budget=9990,
 640x480, scale=1.0):
 
 **Table 9. Task 4 measured baseline before optimisation (full-quality config,
-640x480, 9,990 bricks). The processing stages sum to 2,108 ms; adding the
-~32 ms camera read gives the 2,140 ms frame period, so the FPS column is the
-full-loop rate and the stage shares are of the processing time.**
+640x480, 9,990 bricks). The six processing stages sum to 2,140 ms, which is the
+frame total the FPS column is computed from; the ~32 ms camera read is measured
+separately and is not included in that sum. The stage shares are percentages of
+the 2,140 ms processing total.**
 
 | Stage                        | median ms        | mean ms          | Share              |
 | ---------------------------- | ---------------- | ---------------- | ------------------ |
@@ -449,7 +516,9 @@ full-loop rate and the stage shares are of the processing time.**
 
 `triangle_means_bgr` dominates because per triangle it zeroes a full-frame mask
 and calls `cv2.mean` — cost is **O(T·H·W)**. The per-triangle cost scales with
-image area (995 µs/triangle at 1706x1279, 157 µs at 640x480, 41 µs at 320x240).
+image area (903 µs/triangle at 1706x1279, 143 µs at 640x480, 39 µs at 320x240 —
+area ratios 7.1x and 4.0x track the per-triangle ratios 6.3x and 3.6x, which is
+the O(T·H·W) prediction).
 Two cheap parameter levers alone reach ~9 FPS (reduce scale to 0.4 and budget to
 1000, K=6), so the optimisation work had to beat **9 FPS at 1000 triangles**,
 not the easier 0.45 FPS. A later correction established that `build_palette` was
@@ -516,7 +585,7 @@ difference near region edges); the recorded E_priority numbers are pinned to
 explicit note when this combination is used. The conclusion (ΔMSE beats Sobel
 priority) is robust under both implementations.
 
-**Step 3: whole-pipeline analysis.** With means and partition fixed, the frame is ~216 ms and the remaining bottlenecks are partition ~107 ms (~50%, 4,695 greedy splits, with the cost dominated by numpy-call count rather than the arithmetic), render ~55 ms (~25%, ~20,000 Python-to-cv2 crossings), palette ~23 ms (~10%, per-frame K-Means), and triangles ~13 ms. I applied four optimisations (all exact unless noted). Optimisation A is a batched render that groups up to K `fillPoly` calls by colour plus one `polylines`, taking render from 55 ms to ~8 ms with **0 differing pixels**. Optimisation B precomputes split priorities by scoring all ~102k candidates up front so the greedy loop is pure Python; partition drops from 107 ms to ~30 ms and the leaves stay bit-identical. Optimisation C changes the palette refresh cadence to rebuild every 10 frames, keeping the palette byte-stable in between, which amortises palette from 23 ms to ~2 ms. Optimisation D vectorises `leaves_to_triangles`, taking triangles from 13 ms to ~2 ms. Paired in-process benchmark (synthetic 640x480, reps=5):
+**Step 3: whole-pipeline analysis.** With means and partition fixed, the frame is ~216 ms and the remaining bottlenecks are partition ~107 ms (~50%, 1,565 greedy splits that add 4,695 cells to the 300-cell start grid, with the cost dominated by numpy-call count rather than the arithmetic), render ~55 ms (~25%, ~20,000 Python-to-cv2 crossings), palette ~23 ms (~10%, per-frame K-Means), and triangles ~13 ms. I applied four optimisations (all exact unless noted). Optimisation A is a batched render that groups up to K `fillPoly` calls by colour plus one `polylines`, taking render from 55 ms to ~8 ms with **0 differing pixels**. Optimisation B precomputes split priorities by scoring all ~102k candidates up front so the greedy loop is pure Python; partition drops from 107 ms to ~30 ms and the leaves stay bit-identical. Optimisation C changes the palette refresh cadence to rebuild every 10 frames, keeping the palette byte-stable in between, which amortises palette from 22.0 ms to 4.9 ms per frame. Optimisation D vectorises `leaves_to_triangles`, taking triangles from 13 ms to ~2 ms. Paired in-process benchmark (synthetic 640x480, reps=5):
 
 **Table 12. Whole-pipeline paired benchmark after optimisations A-D (synthetic 640x480, reps=5).**
 
@@ -565,8 +634,13 @@ ms (1.85x). E2: **render reuse** — the canvas is a pure function of
 `(tri, labels, palette, shapes)`; when geometry is reused and labels+palette are
 byte-identical, the cached canvas is the image, so rasterising is skipped (10 ->
 0 ms on a static scene; under noise it correctly does not fire, because labels
-change). Stacked effect on a static scene: 68.9 -> 27.5 -> **11.4 ms** (~6x),
-all exact reuse, no quality cost.
+change). Stacked effect on a static scene: 68.9 ms baseline → **27.5 ms** with
+temporal coherence (step 5) → **11.4 ms** with opt E as well, i.e. ~6x overall,
+all exact reuse and no quality cost. Note that the 37.1 FPS quoted in step 8
+below is the *step-5* figure (1/27.5 ms), measured before opt E existed; the
+delivered static number is 11.4 ms, about 88 FPS. I have left both in place
+because each is a real measurement of the build that existed at the time, but
+they are not comparable and I should not have quoted 37 FPS as the end state.
 
 **Step 7: display panel.** Two presentation defects fixed: the HUD previously
 drew 14 lines on solid black boxes covering ~35-40% x 30-35% of the render pane
@@ -574,7 +648,7 @@ drew 14 lines on solid black boxes covering ~35-40% x 30-35% of the render pane
 `WINDOW_NORMAL` window stretched the bricks (fixed by uniform letterbox
 scaling into the window's image area, so OpenCV's stretch becomes the identity).
 
-**Step 8: reuse freezes colour + camera AE/WB lock.** Even after A+B+C, a static scene still showed residual colour churn (0.101% of pixels/frame) because means and quantize were still re-running every frame. The fix is, when the partition is reused, also freeze the previous labels plus the canvas, which makes an unchanged scene byte-identical frame to frame. I also locked the camera's auto-exposure and white-balance (`--lock-ae`) because a steady exposure is what makes freezing colour safe rather than stale. Measured: churn 0.101% -> **0.000%**, static effective FPS 22.6 -> **37.1**. I confirmed on the real camera that the jitter is noticeably reduced and the fidelity is no worse.
+**Step 8: reuse freezes colour + camera AE/WB lock.** Even after A+B+C, a static scene still showed residual colour churn (0.101% of pixels/frame) because means and quantize were still re-running every frame. The fix is, when the partition is reused, also freeze the previous labels plus the canvas, which makes an unchanged scene byte-identical frame to frame. I also locked the camera's auto-exposure (`--lock-ae`, optionally at a fixed `--exposure`) and its auto white-balance (`--lock-wb`, a separate flag) because a steady exposure is what makes freezing colour safe rather than stale. Both are opt-in flags, not preset behaviour — the `quality` preset sets only `scale`, `budget` and `K`, so a reader running the default gets drifting exposure unless they pass the flags, and the same is true of the failure case below. Measured: churn 0.101% -> **0.000%**, static effective FPS 22.6 -> **37.1**. I confirmed on the real camera that the jitter is noticeably reduced and the fidelity is no worse.
 
 ### 6.5 Behaviour across different content
 
@@ -610,17 +684,63 @@ than by colour. The last frame (snap_006) is the one genuine failure: the
 source is a nearly uniform bright wall whose switch and light bar are already
 close to blown out, and at that contrast the mosaic loses the subject almost
 entirely. That is the expected behaviour of a fixed palette under clipping, and
-it is why the quality preset keeps exposure locked rather than letting the
-camera normalise it away.
+it is why I capture with `--lock-ae` rather than letting the camera normalise
+the exposure away — a locked exposure is what makes the fixed-palette
+assumption safe, and it is a deliberate flag rather than preset behaviour.
 
 The palette is reused across frames within tolerance
 (`--palette-refresh 10`); no per-scene recalibration was needed.
 
-### 6.6 Summary of the measured changes
+### 6.6 Robustness in a real scenario (Q2), and summary of the measured changes
 
-Every optimisation I made in §6.4 is a paired before/after with stage ms, whole-frame FPS, ΔE/PSNR, and a pixel-diff check, so each change is documented against the measurement that motivated it. The headline reads cleanly only when each number's measurement conditions are attached. With that in mind: the full live pipeline including camera read goes from 0.45 FPS to about 4.6 FPS at the full quality config (whole frame 2140 -> ~215 ms); on static input the temporal reuse lifts the effective rate further, to roughly 37 FPS in headless mode without camera read-back (the camera's own 31-33 FPS read is a separate ceiling); and the processing-only path on synthetic frames reaches about 16.8 FPS. The spatial optimisations are exact, with 0 differing pixels on identical input. The temporal layer (palette cadence, warm-start, dead-band, hysteresis, freeze-on-reuse) is a deliberate frame-to-frame approximation made for stability, and it does trade a small amount of fidelity for that stability, which is why paired ratios, not absolute FPS, are the trustworthy numbers here (see Section 6.2).
+The template asks how I ensure robustness in a real scenario. I take that to
+mean four distinct failure modes, and I answer each with a measurement rather
+than an intention. This subsection consolidates them; the evidence is in the
+sections named.
 
-### 6.7 Problems found and solved (Task 4)
+* **Does it stay within the assignment's limits on unseen content?** The
+  partitioner cannot exceed the budget by construction — the quadtree guard is
+  `while heap and n_tri + 6 <= max_triangles`, and `region_merge_partition`
+  raises rather than return an over-budget partition. The PDF's other hard
+  constraint, no gaps and no overlaps, is verified rather than argued:
+  `code/verify_coverage.py` checks all three delivered tessellations and finds
+  cells distinct and grid-aligned, each cell's two triangles satisfying the
+  exact area identity `area(a) + area(b) = s²`, and **0 uncovered pixels** in
+  the rasterised crop (§1).
+* **Does it survive a deadline?** Measured per-stage and paired before/after
+  throughout §6.4, from 2,140 ms down to 59.5 ms per moving frame, with the
+  spatial optimisations exact to 0 differing pixels.
+* **Does it stay visually stable frame to frame?** The temporal layer and its
+  measured churn numbers are in §6.4 step 8; churn on a static scene goes
+  0.101% → 0.000% of pixels. The conditions that make this safe — a locked
+  exposure — are stated there rather than assumed, and I flag that the flags
+  are opt-in.
+* **Does it behave on content I did not design for?** §6.5 runs seven scenes
+  spanning portraits, hard texture, saturated colour, low light, backlit
+  fabric and a near-overexposed wall, and reports the one configuration that
+  fails rather than only the six that work.
+
+Where robustness is *not* established, I would rather say so: this is a single
+camera on a single machine (Section 9), the test content is one image
+for Tasks 2-3, and the temporal layer deliberately trades a small amount of
+fidelity for stability.
+
+Every optimisation I made in §6.4 is a paired before/after with stage ms, whole-frame FPS, ΔE/PSNR, and a pixel-diff check, so each change is documented against the measurement that motivated it. The headline reads cleanly only when each number's measurement conditions are attached. With that in mind, and separating three different things that are easy to conflate:
+
+* **Per-frame cost at the full quality config, moving input.** 2,140 ms before
+  optimisation → **59.5 ms**, i.e. ~16.8 FPS processing-only on synthetic frames
+  (Table 12). An intermediate build, after the two O(T·H·W)/per-candidate fixes
+  but before the render and means work, measured ~215 ms (~4.6 FPS); that was a
+  waypoint, not the delivered figure.
+* **The same pipeline on a static scene.** 68.9 → **11.4 ms** (~88 FPS) with
+  exact spatial reuse. The 37.1 FPS in step 8 is the step-5 measurement of this
+  (27.5 ms) and is superseded.
+* **The camera's own ceiling.** Its 31-33 FPS read-back is a separate limit and
+  is not something these optimisations change.
+
+The spatial optimisations are exact, with 0 differing pixels on identical input. The temporal layer (palette cadence, warm-start, dead-band, hysteresis, freeze-on-reuse) is a deliberate frame-to-frame approximation made for stability, and it does trade a small amount of fidelity for that stability, which is why paired ratios, not absolute FPS, are the trustworthy numbers here (see Section 6.2).
+
+### 6.7 Problems found and solved (Task 4) (Q3)
 
 The 0.45 FPS baseline came from two main offenders: the O(T·H·W) means stage and the per-candidate numpy means inside the partition (Section 6.2). I solved them with in-cell means, SAT tables, batched render, precomputed priorities, palette cadence, and vectorised triangles, all detailed in §6.4.
 
@@ -628,9 +748,9 @@ A second issue was fringe-contaminated means, a latent bug in the shipped refere
 
 K-Means palette instability was the third problem. The combination of a global RNG and 10 restarts on near-degenerate data was flipping local optima between frames (§6.4 step 4). I addressed it with warm-start plus dead-band plus reuse plus AE/WB lock (§6.4 steps 5 and 8).
 
-Two presentation defects also needed attention, namely the HUD FPS misreport and the window stretch on resize. Their fixes are in §5.3 and §6.4 step 7.
+Two presentation defects also needed attention, namely the HUD FPS misreport and the window stretch on resize. Their fixes are in §6.3 and §6.4 step 7.
 
-Finally, the `build_palette` "anomaly" turned out to be a 2-sample measurement artifact, not a real performance problem, as I worked out in §5.2.
+Finally, the `build_palette` "anomaly" turned out to be a 2-sample measurement artifact, not a real performance problem, as I worked out in §6.2.
 
 ---
 
@@ -648,9 +768,9 @@ and 3 were rejected or rolled back after measurement.
 
 | #  | Prompt intent                                                                                                       | AI output                                                                                                                                              | Outcome                                                         |
 | -- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| P1 | Design the tessellation: equal right-isosceles triangles, <=10000, 3 colours, no gaps/overlaps; propose grid step S | Square cells cut by one diagonal (2 tri/cell); S = smallest side with`2*M*N <= 10000`; alternate diagonal by checkerboard parity                     | Adopted; diagonal convention single-sourced in`brick_geom.py` |
-| P2 | Compare three ways to pick exactly 3 colours (multi-Otsu on luma, K-Means K=3, fixed percentile)                    | Multi-Otsu as primary (adapts to histogram); keep the other two as comparison baselines; add`_palette_by_luminance` so labels are comparably ordered | Adopted; 9-metric suite compares them                           |
-| P3 | First run produced a 1x1 grid; review`compute_grid`                                                               | Loop scanned S downward returning the largest fit; flip to grow upward and return the smallest S                                                       | Adopted; fixed the direction-flip bug                           |
+| P1 | Design the tessellation: equal right-isosceles triangles, <=10000, 3 colours, no gaps/overlaps; propose grid step S | Square cells cut by one diagonal (2 tri/cell); S = smallest side with `2*M*N <= 10000`; alternate diagonal by checkerboard parity                     | Adopted; diagonal convention single-sourced in `brick_geom.py` |
+| P2 | Compare three ways to pick exactly 3 colours (multi-Otsu on luma, K-Means K=3, fixed percentile)                    | Multi-Otsu as primary (adapts to histogram); keep the other two as comparison baselines; add `_palette_by_luminance` so labels are comparably ordered | Adopted; 9-metric suite compares them                           |
+| P3 | First run produced a 1x1 grid; review `compute_grid`                                                               | Loop scanned S downward returning the largest fit; flip to grow upward and return the smallest S                                                       | Adopted; fixed the direction-flip bug                           |
 
 ### 7.2 Task 3 (6 prompts, 5 adopted / 1 rejected)
 
@@ -663,7 +783,7 @@ and 3 were rejected or rolled back after measurement.
 | P3 | Split by ΔMSE or by Sobel edge density?                             | Suggested edge-density priority                                                       | **Rejected on the decisive metric**: worst Edge F1 of the grid (0.213) and the only negative EPI |
 | P4 | Review the quadtree loop condition                                   | Had written the wrong mental model (`<= budget: return`); splitting increases count | AI-introduced bug, fixed (Section 5.5)                                                              |
 | P5 | At what size does splitting stop paying?                             | Marginal-benefit study: size-64 ~68x size-2; size-2 = 0.4% of benefit                 | Drove the B2 (S_max) group                                                                          |
-| P6 | `region_merge_partition` stalls at 8640 merges                     | Candidates generated off-grid; align to`target_size`                                | Adopted                                                                                             |
+| P6 | `region_merge_partition` stalls at 8640 merges                     | Candidates generated off-grid; align to `target_size`                                | Adopted                                                                                             |
 
 ### 7.3 Task 4 (8 prompts, 6 adopted / 2 rolled back)
 
@@ -702,7 +822,7 @@ The third is a bias the AI shares with most assistants, seen most sharply in
 the Task 3 S_max=64 episode. When I asked it to pick S_max, it reported "64 is
 the clear winner" by leading with the four metrics where 64 won and demoting
 the single regression (ΔE2000) to a parenthetical. Only after I pushed back
-did it break ΔE down by region and find that the shadow area was about 44%
+did it break ΔE down by region and find that the shadow area was materially
 worse under 64. What I took from this: the model framed its answer to match
 the hypothesis I had already implied, and did not volunteer that objective
 metrics and human perception can invert.
@@ -726,7 +846,7 @@ could only demonstrate my hypothesis. It never asked whether the premise was
 worth interrogating. The same bias reappeared when the results came in: the
 model reported "S_max=64 is the clear winner" by leading with the four metrics
 where 64 won and demoting the single contradicting metric, ΔE2000, to a
-parenthetical. The contradicting analysis, that the shadow region is about 44%
+parenthetical. The contradicting analysis, that the shadow region is clearly
 worse under 64, was only produced after I pushed back (Section 5.4). What
 concerns me most is the third variant, where the model treated a metric
 verdict as a perceptual verdict. The four objective metrics preferred 64; my
@@ -826,19 +946,27 @@ priority, quadtree. The S_max=32-vs-64 result I present as a two-sided
 trade-off rather than a single winner, for two reasons: the sweep is
 single-image evidence, and a strong-hue scene may shift the palette-method and
 K rankings; and the sweep driver never seeds OpenCV's RNG, so I measured its
-run-to-run ΔE2000 spread at ~0.4 and re-grounded every comparison whose gap was
-smaller than that on a deterministic palette or a seeded run (Section 5.2). The
-conclusions I do state — larger K helps colour, ΔMSE beats edge-density on edge
-alignment, a coarse S_max buys structure — all rest on gaps several times that
-floor.
+run-to-run ΔE2000 spread at ~0.4 and re-grounded the colour-side comparisons
+whose ΔE2000 gap was smaller than that on a deterministic palette (Section 5.4)
+or a seeded run (Section 5.6). Being precise about what that floor does and does
+not cover: each metric has its own floor, and Section 5.2 lists every
+comparison against the matching one. The K conclusion rests on a ΔE2000 gap of
+2.34 against a 0.441 floor (5.3x); the S_max and priority conclusions rest on
+structural gaps of 2.9x to 34x their own floors. Three comparisons do *not*
+clear their floors and I have said so rather than leaning on them: the colour
+side of the S_max trade-off, the S_max 64-vs-128 step, and the colour side of
+the priority comparison. The palette choice is the honest borderline — 1.5x on
+ΔE2000, and Median-Cut is better on all four structural metrics — and Section
+5.6 sets out both sides of it instead of claiming a win.
 
 In Task 4 I turned the pipeline into a live camera loop and dealt with the
 real-world problems the offline tasks never exercised: an O(T·H·W) mean stage
 that took 75% of the frame, the AI-introduced quadtree bug, a latent fringe
 defect, frame-to-frame jitter from unstable K-Means and camera exposure
 drift, and a misleading HUD. I measured each before and after; on a static
-scene the loop runs at about 37 FPS effective (headless, no camera read-back)
-through exact spatial reuse plus the declared temporal-stability layer.
+scene the loop reaches 11.4 ms per frame, about 88 FPS (headless, no camera
+read-back) through exact spatial reuse plus the declared temporal-stability
+layer, against 2,140 ms before any optimisation.
 
 The pipeline's layered design, a shared geometry/colour/rendering core
 with one decision layer per task, is what let the Task 4 optimisations be
@@ -849,7 +977,7 @@ non-reproducible, and I re-generate all headline numbers from
 
 The limitations I want to be honest about: a single test image for Task 2
 and Task 3, K-Means non-reproducibility (declared, bounded), and measurements
-from a single machine for Task 4. The multi-scene testing (§5.5)
+from a single machine for Task 4. The multi-scene testing (§6.5)
 covers seven frames from one camera in one room, which is enough
 to show the pipeline is not tuned to one image and not enough to claim
 generalisation.
@@ -922,10 +1050,21 @@ the source, independent of overall intensity. A positive value means the two
 agree about where the edges are; a negative value means they disagree, which in
 this project is the signature of triangle boundaries that do not follow image
 content. Because the magnitudes are sparse and heavy-tailed, a correct mosaic
-still scores near zero, so EPI is read as a direction rather than as a
-magnitude. The name is local to this report: it is a plain Pearson correlation
-of Sobel magnitudes and is not the Edge-Preservation Index of the image-fusion
-literature.
+still scores near zero, so the sign is the reliable part of the metric.
+
+That has a consequence I should be explicit about, because the rest of the
+report leans on EPI differences: because a good mosaic sits near zero, *magnitude
+comparisons between two good mosaics are not meaningful in absolute terms* — +0.045
+and +0.015 are both "close to zero and positive", and the ratio between them is
+not a quantity the metric defines. Where I compare EPI between configurations
+(Sections 5.2, 5.6) I use it as a sign-and-ordering signal on configurations
+whose Edge F1 also moves in the same direction, never as a standalone effect
+size, and I check each such claim against the 0.0021 run-to-run spread I
+measured. The one comparison that rests on EPI's *sign* rather than its size is
+the Sobel-priority run, which is the only configuration in the sweep that goes
+negative at all. The name is local to this report: it is a plain Pearson
+correlation of Sobel magnitudes and is not the Edge-Preservation Index of the
+image-fusion literature.
 
 **Quantisation error** (lower is better) is the mean CIEDE2000 distance between
 each triangle's own mean colour and the palette entry it was assigned. It
