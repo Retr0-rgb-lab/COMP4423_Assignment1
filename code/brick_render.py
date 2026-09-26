@@ -50,7 +50,8 @@ def triangle_means_bgr(img, triangles):
     return means
 
 
-def render_triangles(canvas_shape, triangles, labels, palette_bgr, orig_shape=None):
+def render_triangles(canvas_shape, triangles, labels, palette_bgr, orig_shape=None,
+                     draw_border=True):
     """Fill each triangle with its palette colour and draw a thin border.
 
     Function
@@ -97,8 +98,9 @@ def render_triangles(canvas_shape, triangles, labels, palette_bgr, orig_shape=No
     for tri, lab in zip(triangles, labels):
         color = tuple(int(v) for v in palette_bgr[lab])
         cv2.fillPoly(canvas, [tri], color)
-        cv2.polylines(canvas, [tri], isClosed=True,
-                      color=BORDER_COLOR_BGR, thickness=1, lineType=cv2.LINE_8)
+        if draw_border:
+            cv2.polylines(canvas, [tri], isClosed=True,
+                          color=BORDER_COLOR_BGR, thickness=1, lineType=cv2.LINE_8)
     if orig_shape is not None:
         oH, oW = orig_shape
         canvas = canvas[:oH, :oW]
@@ -106,7 +108,7 @@ def render_triangles(canvas_shape, triangles, labels, palette_bgr, orig_shape=No
 
 
 def render_triangles_batched(canvas_shape, triangles, labels, palette_bgr,
-                             orig_shape=None):
+                             orig_shape=None, draw_border=True):
     """Fill + border the whole mosaic in at most K+1 cv2 calls (Task 4 opt A).
 
     Function
@@ -178,9 +180,12 @@ def render_triangles_batched(canvas_shape, triangles, labels, palette_bgr,
         cv2.fillPoly(canvas, tri[grp], color)
 
     # Single border pass over ALL triangles, identical colour and thickness
-    # to the per-triangle loop in render_triangles.
-    cv2.polylines(canvas, tri, isClosed=True, color=BORDER_COLOR_BGR,
-                  thickness=1, lineType=cv2.LINE_8)
+    # to the per-triangle loop in render_triangles. Skipped when draw_border is
+    # False, which is the border-free ablation reported in the report's
+    # Section 5.6; the fill pass above is unaffected.
+    if draw_border:
+        cv2.polylines(canvas, tri, isClosed=True, color=BORDER_COLOR_BGR,
+                      thickness=1, lineType=cv2.LINE_8)
 
     if orig_shape is not None:
         oH, oW = orig_shape

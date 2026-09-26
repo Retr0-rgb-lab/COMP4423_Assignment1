@@ -14,6 +14,7 @@ Outputs (all under `code/pics/task3/best/`):
   * `<name>_metrics.json` -- the compute_metrics dict for that run
   * `best_compare.png`   -- the BEST render beside the comparison runs
 """
+import argparse
 import json
 import os
 import sys
@@ -44,7 +45,7 @@ OTHERS = [
 ]
 
 
-def run(img, partition, s_set, k, palette_method):
+def run(img, partition, s_set, k, palette_method, draw_border=True):
     """Run one full config end to end and return its render, metrics and sizes.
 
     Function: the whole Task 3 pipeline for a single configuration, inlined here
@@ -94,7 +95,8 @@ def run(img, partition, s_set, k, palette_method):
     means = triangle_means_bgr(padded, tris)
     pal = build_palette(means, k, palette_method)
     labels = quantize_nearest_bgr(means, pal)
-    canvas = render_triangles(ps, tris, labels, pal, osz)
+    canvas = render_triangles(ps, tris, labels, pal, osz,
+                             draw_border=draw_border)
     m = compute_metrics(img, canvas, means, labels, pal, len(leaves) * 2,
                         time.time() - t0)
     sizes = {}
@@ -139,8 +141,19 @@ def main():
     other drivers -- see the FPS caveat in brick_metrics.
 
     Outputs: `best_config.png` (the BEST render alone), one `<name>.png` and one
-    `<name>_metrics.json` per config, and `best_compare.png`.
+    `<name>_metrics.json` per config, `best_compare.png`, and
+    `summary/brick_size_counts.json`.
+
+    `--no-border` re-runs the chosen configuration with the 1-px boundary
+    polyline suppressed, which is the border-free ablation the report quotes in
+    Section 5.6. Everything else (partition, palette, labels) is held fixed, so
+    the two runs differ only in that pass.
     """
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--no-border", action="store_true",
+                    help="suppress the 1-px brick boundary and write "
+                         "best_config_noborder.png + its metrics")
+    args = ap.parse_args()
     os.makedirs(OUT_DIR, exist_ok=True)
     img = cv2.imread(DEFAULT_INPUT)
 
@@ -160,9 +173,48 @@ def main():
                        for k, v in metrics_to_dump.items()}, f, indent=2)
         if name == BEST[0]:
             best_canvas = canvas
+            best_sizes = sizes
+
+    # The PDF asks for a brick summary (total bricks + count per size). Write it
+    # as a product file so the report's Table 8 traces back to a re-runnable
+    # driver rather than to a hand-copied number. `cells_per_size` counts square
+    # cells; `bricks_per_size` is twice that, since each cell is cut into two
+    # triangles.
+    summary_dir = os.path.join(os.path.dirname(OUT_DIR), "summary")
+    os.makedirs(summary_dir, exist_ok=True)
+    cells_per_size = {str(s): int(n) for s, n in sorted(best_sizes.items())}
+    summary = {
+        "image": "code/pics/sky.jpg",
+        "image_hw": [int(img.shape[0]), int(img.shape[1])],
+        "config": {"name": BEST[0], "S_set": list(BEST[2]), "budget_bricks": BUDGET,
+                   "K": BEST[3], "palette_method": BEST[4], "priority": "mse",
+                   "impl": "precomp"},
+        "n_cells": int(sum(best_sizes.values())),
+        "n_bricks": int(2 * sum(best_sizes.values())),
+        "cells_per_size": cells_per_size,
+        "bricks_per_size": {k: 2 * v for k, v in cells_per_size.items()},
+    }
+    with open(os.path.join(summary_dir, "brick_size_counts.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"[best] brick summary  -> {summary_dir}/brick_size_counts.json")
 
     cv2.imwrite(os.path.join(OUT_DIR, "best_config.png"), best_canvas)
     print(f"\n[best] chosen config = {BEST[0]}  -> {OUT_DIR}/best_config.png")
+
+    if args.no_border:
+        # Border-free ablation: identical partition, palette and labels, with
+        # only the 1-px boundary pass suppressed. Reported in Section 5.6.
+        cv2.setRNGSeed(0)
+        nb_canvas, nb_m, _ = run(img, BEST[1], BEST[2], BEST[3], BEST[4],
+                                 draw_border=False)
+        cv2.imwrite(os.path.join(OUT_DIR, "best_config_noborder.png"), nb_canvas)
+        nb_dump = {k: v for k, v in nb_m.items() if k != "Heatmap"}
+        with open(os.path.join(OUT_DIR, "best_config_noborder_metrics.json"),
+                  "w") as f:
+            json.dump({k: (v if not isinstance(v, np.ndarray) else v.tolist())
+                       for k, v in nb_dump.items()}, f, indent=2)
+        report("best_config_noborder", nb_m, {})
+        print(f"[best] border-free ablation -> {OUT_DIR}/best_config_noborder.png")
 
     # Compare grid: original + the three renders
     H, W = img.shape[:2]

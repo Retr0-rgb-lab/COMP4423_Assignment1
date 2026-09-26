@@ -96,9 +96,10 @@ def main():
     Shapes
     ------
     Input: CLI arguments only, via argparse (`--camera-index`, `--from-file`,
-    `--file`, `--no-show`). Output: one (H, W, 3) uint8 BGR frame handed to
-    `show_and_wait`; no array is returned. Semantics: `frame[y, x, c]` is a BGR
-    channel value.
+    `--file`, `--no-show`, `--save`). Output: one (H, W, 3) uint8 BGR frame
+    handed to `show_and_wait`; no array is returned. Semantics: `frame[y, x, c]`
+    is a BGR channel value. `--save` writes that same frame to disk, creating
+    the parent directory, so the Task 1 deliverable leaves an artefact.
 
     Raises
     ------
@@ -117,6 +118,9 @@ def main():
     ap.add_argument("--no-show", action="store_true",
                     help="capture and report the frame without opening a window "
                          "(required on a headless host)")
+    ap.add_argument("--save", default=None, metavar="PATH",
+                    help="also write the captured frame to PATH, so the "
+                         "deliverable leaves an artefact behind")
     args = ap.parse_args()
 
     frame = None
@@ -138,6 +142,13 @@ def main():
         source = path
 
     print(f"[task1] source = {source}  shape = {frame.shape}  dtype = {frame.dtype}")
+    if args.save:
+        parent = os.path.dirname(os.path.abspath(args.save))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        if not cv2.imwrite(args.save, frame):
+            raise OSError(f"cv2.imwrite failed for {args.save}")
+        print(f"[task1] saved = {args.save}")
     show_and_wait(frame, show=not args.no_show)
 
 

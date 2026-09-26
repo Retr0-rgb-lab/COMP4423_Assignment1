@@ -5,6 +5,7 @@
     1706
   ],
   "config": {
+    "name": "quadtree_smax32_k16_lab",
     "S_set": [
       1,
       2,
@@ -14,6 +15,8 @@
       32
     ],
     "budget_bricks": 9990,
+    "K": 16,
+    "palette_method": "kmeans_lab",
     "priority": "mse",
     "impl": "precomp"
   },
