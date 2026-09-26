@@ -581,9 +581,10 @@ scaling into the window's image area, so OpenCV's stretch becomes the identity).
 The same pipeline was run on seven camera snapshots of different content,
 captured with `camera_app.py --lock-ae --snapshot-dir code/pics/task4/`
 (`snap_000.png` .. `snap_006.png`, each pairing the raw frame on the left with
-its triangle-brick render on the right). They cover a face, a strongly
-textured keyboard, a low-light desk lamp, two backlit high-dynamic-range
-lamps, a curtain against window light, and a near-overexposed wall.
+its triangle-brick render on the right). They cover two portraits under
+different lighting, a strongly textured keyboard, a group of saturated
+luggage items, a low-light desk lamp, a curtain against window light, and a
+near-overexposed wall.
 
 ![Fig. 13. Seven camera snapshots of different content, each pairing the raw
 frame (left) with its triangle-brick render (right), composed by
@@ -591,21 +592,26 @@ frame (left) with its triangle-brick render (right), composed by
 The adaptive tessellation puts small bricks on detail and large bricks on flat
 regions in every scene; the same configuration runs on all of them.](code/pics/task4/L2_contact_sheet.png)
 
-The renders hold up across content types. In the two face frames
-(snap_000, snap_001) the glasses outline, face contour and hair edge survive as
-dense fine bricks, with one consistent artefact: the cool-toned indoor light
-comes out warmer than the input, which a white-balance pass would fix. The
-keyboard (snap_002) drives small bricks across the whole key field while the
-desk stays in large flat cells. The lamp scenes (snap_003, snap_004) are the
-hardest cases, a blown-out bulb against a barely lit wall, and the lamp body
-and light source are still legible because the saturated region gets the
-finest cells. In the curtain frame (snap_005) the folds and the window grid are
-carried by brick density rather than by colour. The last frame (snap_006) is
-the one genuine failure: the source is a nearly uniform bright wall whose
-switch and light bar are already close to blown out, and at that contrast the
-mosaic loses the subject almost entirely. That is the expected behaviour of a
-fixed palette under clipping, and it is why the quality preset keeps exposure
-locked rather than letting the camera normalise it away.
+The renders hold up across content types. In the two portrait frames
+(snap_000 front-lit against a flat wall, snap_001 backlit through a sheer
+curtain) the glasses outline, face contour and hair edge survive as dense fine
+bricks, with one consistent artefact: the cool-toned indoor light comes out
+warmer than the input, which a white-balance pass would fix. The keyboard
+(snap_002) drives small bricks across the whole key field while the desk stays
+in large flat cells. The luggage scene (snap_003) is the one that separates
+palette from geometry: sage-green, teal and maroon cases against a warm wooden
+floor give the 16-colour palette genuinely distinct hues to separate, and the
+bricks shrink onto the bag seams and zips while the near-flat wall behind stays
+coarse. The lamp scene (snap_004) is the hardest lighting case, a blown-out bulb
+against a barely lit wall, and the lamp body and light source are still legible
+because the saturated region gets the finest cells. In the curtain frame
+(snap_005) the folds and the window grid are carried by brick density rather
+than by colour. The last frame (snap_006) is the one genuine failure: the
+source is a nearly uniform bright wall whose switch and light bar are already
+close to blown out, and at that contrast the mosaic loses the subject almost
+entirely. That is the expected behaviour of a fixed palette under clipping, and
+it is why the quality preset keeps exposure locked rather than letting the
+camera normalise it away.
 
 The palette is reused across frames within tolerance
 (`--palette-refresh 10`); no per-scene recalibration was needed.

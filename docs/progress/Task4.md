@@ -1253,6 +1253,54 @@ comparison. `task3_best.py` does seed, so the chosen configuration's numbers
 (ΔE 8.951, SSIM 0.3587, Edge F1 0.3455) are reproducible and were unchanged by
 this pass.
 
+## Snapshot revision (2026-09-26) — the duplicate-scene problem
+
+The original seven captures contained two near-duplicate pairs, found by
+pixel comparison rather than by eye: `snap_000` vs `snap_001` (mean |diff| 4.0,
+the same face one exposure apart) and `snap_003` vs `snap_004` (mean |diff| 1.4,
+the same desk lamp). Six of the seven files therefore covered four distinct
+scenes, which is weak evidence for the Level 2 "different content" requirement.
+
+Measured, not eyeballed:
+
+    snap_000 vs snap_001 : mean |diff| = 4.0
+    snap_003 vs snap_004 : mean |diff| = 1.4
+
+What changed, and what I looked for in the replacements:
+
+- `snap_000` → a head-and-shoulders portrait, front-lit against a flat wall.
+  The intermediate attempt (torso only, head cropped at the neck, plus two more
+  near-identical NIKE-shirt frames) was rejected: it duplicated `snap_001`'s
+  subject type and had no saturated hue.
+- `snap_003` → a group of luggage: sage-green hard-shell case, teal drawstring
+  bag, maroon duffel, on a wooden floor with a wicker chair behind. This was
+  the gap worth filling — no other scene gave the 16-colour Lab palette
+  genuinely distinct hues, and it adds a clear foreground/midground/background
+  layering that none of the others had.
+- `snap_001`, `snap_002` were overwritten during this pass and restored from
+  git; `snap_004`, `snap_005`, `snap_006` were never touched.
+
+`git checkout` was deliberately NOT run on `snap_003`: restoring it would have
+recreated the lamp duplicate at 004 while discarding the luggage scene, so the
+two goals conflicted and the replacement was kept instead.
+
+Final state: all seven are distinct scenes, confirmed by the same pairwise
+check (no pair below the threshold). The weakest remaining point is that
+`snap_000` and `snap_001` are both portraits — different clothing, background
+and lighting direction, so they are different images, but the same subject
+category. The report states the two lighting conditions explicitly rather than
+presenting them as unrelated content. The colour-variety requirement is carried
+by `snap_003`.
+
+`snap_006` (near-overexposed wall) is kept deliberately as the single failure
+case; the report presents it as such instead of hiding it. `snap_002` has the
+keyboard's right edge cropped and a slightly blown white desk, which is
+acceptable for a texture test but is not ideal framing.
+
+Contact-sheet labels in `task4_l2_contact_sheet.py` were rewritten to match the
+images actually present; two of the seven had described the overwritten
+content.
+
 ## Known limitations / TODOs
 
 - **Level 1 baseline is not interactive** (~0.5 FPS). Declared, not hidden.
