@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 # Extracted reference material (sample report); keep out of git (AGENTS 2).
 docs/progress/sample_report/
+
+# Build-only down-scaled image copies for the report PDF (see
+# docs/progress/Report_latex_build.md). The .tex falls back to code/pics/
+# originals when absent.
+code/pics/pdfimg/
