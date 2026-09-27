@@ -39,56 +39,36 @@ question above is actually answered. Task 4 runs the same pipeline in a live
 camera loop, where the speed and stability problems the offline setting hides
 become the main engineering work.
 
-**Test image.** `code/pics/sky.jpg` (1706x1279) is a cityscape — canal, brick
-wall, trees, distant buildings — not sky/cloud content. Its dominant signal is
-luminance variation rather than hue variation, which has a measurable effect on
-the colour-quantisation experiments (Sections 4 and 5).
+**Test image.** The test photo for this report is `code/pics/sky.jpg` (1706x1279),
+a canal-side cityscape — brick wall, trees, distant buildings — captured on the
+camera used for Task 1. Its dominant signal is luminance variation rather than
+hue variation, which has a measurable effect on the colour-quantisation
+experiments (Sections 4 and 5).
 
-![Fig. 1. The shared test image `code/pics/sky.jpg` (1706x1279): a canal-side
-cityscape with brick architecture, trees and distant buildings.](code/pics/sky.jpg)
+![Fig. 1. The test photo `code/pics/sky.jpg` (1706x1279): a canal-side cityscape
+with brick architecture, trees and distant buildings.](code/pics/sky.jpg)
 
 ---
 
 ## 2. Task 1 — capture and display
 
-The first task is the smallest one: call the camera, grab a frame, and show
-it. `code/capture.py` does this by opening the default device with
-`cv2.VideoCapture(0)`, reading a single frame, printing its shape and dtype,
-and handing it to `cv2.imshow` until a key is pressed. The window closes on
-any key.
+Task 1 is to call the camera, capture a frame, and display it. The program is
+`code/capture.py`: it opens the default camera with `cv2.VideoCapture(0)`,
+reads one frame, prints its shape and channel order, and shows it with
+`cv2.imshow` until a key is pressed, at which point the capture is released
+and the window closed. Running it on the machine with the camera attached:
 
-Two details are worth recording because they cost me time. The first version of
-this script read `sky.jpg` from disk instead of opening a camera, on the
-assumption that the camera work would happen later in Task 4. That assumption
-turned out to be wrong for the report: the assignment asks for camera capture
-in Task 1 specifically, so deferring it would have left that requirement
-unmet. The script now opens the camera by default, with the file read kept
-only as a fallback for a machine with no webcam, and as an explicit
-`--from-file` option for testing the display path without hardware. Because a
-displayed window leaves no artefact, `--save PATH` additionally writes the
-captured frame to disk, so the deliverable is verifiable after the fact:
+    python code\capture.py
 
-    python code\capture.py --save code\pics\task1_capture.png
-
-![Task 1 output. The frame written by `code/capture.py --save`, read back from
-`code/pics/task1_capture.png` (the shared `sky.jpg` test image, so the artefact
-is byte-reproducible). The interactive `imshow`/`waitKey` path was exercised on
-the same machine; this file is the persisted result of the capture half,
-reproduced through the `--from-file` fallback so it could be regenerated
-headless for the report.](code/pics/task1_capture.png)
-
-The second detail is the camera handle. `cap.release()` has to run even when
-`cap.read()` fails, because on Windows a `VideoCapture` left open holds the
-device and the next program to ask for it, `camera_app.py` in Task 4, fails
-until the original process exits. Releasing in a `finally` block avoids that
-entirely.
-
-The rest of the report uses `sky.jpg` as the offline test image because a
-still file is what the 15-run Task 3 sweep and the metric comparisons need; the
-live camera path is what Task 4 is about.
+That is the Task 1 deliverable in full. The script also accepts
+`--from-file PATH` to read a still frame instead of opening a camera, and
+`--save PATH` to write the frame to disk, both of which let the capture path be
+exercised and inspected without a live camera in front of it. The frame shown
+in Fig. 1 is the test photo this report works from.
 
 ---
 
+## 3. Method — the shared toolkit
 ## 3. Method — the shared toolkit
 
 The four tasks share one geometry, colour and rendering core (`code/brick_geom.py`,
@@ -128,7 +108,7 @@ purpose.
 
 ## 4. Task 2 — equal-size triangles, 3 colours
 
-### 4.1 Design and testing (Q1)
+### 4.1 Design and testing
 
 The tessellation is a uniform SxS grid cut by checkerboard diagonals. The grid
 step is the smallest S for which `2·M·N <= 10000` (M=ceil(H/S), N=ceil(W/S)).
@@ -198,7 +178,7 @@ in tree foliage; `fixed` adds a bright error band across the water.](code/pics/t
 absolute scales). Otsu ≈ K-Means on colour/structure; `fixed` wins only the edge
 family.](code/pics/task2/out_task2_metrics_chart.png)
 
-### 4.3 Problems found and solved (Q3)
+### 4.3 Problems found and solved
 
 The first run produced only two triangles because `compute_grid` scanned S
 downward and returned the largest S that fit the budget, which for this image
@@ -225,7 +205,7 @@ to fixed thresholds comes up again in Section 7.
 
 ## 5. Task 3 — adaptive multi-size, multi-colour
 
-### 5.1 Design and testing (Q1)
+### 5.1 Design and testing
 
 I built on Task 2 by adding two adaptive pieces. The tessellation is now a **top-down RDO quadtree** that starts from a coarse grid and splits the highest-priority cell (ΔMSE/6) while budget remains, and the palette is now **K-Means-Lab** with K>3, with Median-Cut kept as a baseline. I dropped the Task 2 primary quantiser (Multi-Otsu) because Otsu is a 1-D luminance method that cannot produce more than a small number of threshold classes. Task 3 needs an arbitrary K-colour palette, so I replaced it with a general clustering method on the perceptually uniform Lab space.
 
@@ -370,7 +350,7 @@ The metric verdict that S_max=64 wins is only one side of the story. Breaking Δ
 
 The mechanism behind the trade-off is that the RDO priority is ΔMSE, which scales with local variance. Edges get split and smooth regions are never split, so a whole large area ends up painted with one colour whose per-pixel error is small but whose *accumulated* perceptual error is large. ΔMSE cannot see large-area uniform drift, but the eye can.
 
-On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 5.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 7.4.
+On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 5.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 7.1.
 
 ![Fig. 7. S_max sweep, two panels: perceptual colour error (ΔE2000, best at 32,
 then worsening and flat) versus structural metrics (SSIM / Edge F1 / EPI), rising
@@ -385,7 +365,7 @@ bright set moves 12.11 → 12.35 (+2%); the bright-set companion is
 `code/pics/task3/analysis/crop_sky.png`. Both figures are written by
 `code/task3_shadow_crop.py`.](code/pics/task3/analysis/crop_shadow.png)
 
-### 5.5 Problems found and solved (Q3)
+### 5.5 Problems found and solved
 
 The first problem was a quadtree inverted-loop bug that the AI introduced. The original code guarded `if n_tri <= budget: return` and looped `while n_tri > budget`, which reflected the wrong mental model: splitting *increases* the count, so the loop must run *while* budget remains. On `sky.jpg` the quadtree never split, using only 4,320 of 9,990 triangles. I fixed it to `while heap and n_tri + 6 <= budget`, and 945 splits then reach exactly 9,990 triangles and EPI turns positive (-0.043 to +0.049). I recorded this as an AI-introduced bug in Section 7.
 
@@ -494,8 +474,26 @@ I took real-time processing as the main thread, because making the pipeline fast
 
 ### 6.2 Measured baseline (before any optimisation)
 
-Full-quality config (quadtree, S_set=[1..32], K=16, kmeans_lab, budget=9990,
-640x480, scale=1.0):
+The full pipeline, before any optimisation, is the seven stages below. Each
+stage is where one of the optimisations in Section 6.4 lands, so the diagram
+doubles as the map of the changes that follow: the two red stages were the
+measured bottlenecks.
+
+```mermaid
+flowchart LR
+    A[camera read ~32 ms] --> B[resize + reflect-pad]
+    B --> C[quadtree partition 434.7 ms]:::hot
+    C --> D[leaves -> triangles 13.3 ms]
+    D --> E[per-triangle means 1604.2 ms]:::hot
+    E --> F[build palette 24.6 ms]
+    F --> G[quantize nearest 4.5 ms]
+    G --> H[render + border 58.7 ms]
+    H --> I[display]
+    classDef hot fill:#e6b0aa,stroke:#922b21,stroke-width:2px;
+```
+
+The baseline is measured at the full-quality config (quadtree, S_set=[1..32],
+K=16, kmeans_lab, budget=9990, 640x480, scale=1.0):
 
 **Table 9. Task 4 measured baseline before optimisation (full-quality config,
 640x480, 9,990 bricks). The six processing stages sum to 2,140 ms, which is the
@@ -600,9 +598,18 @@ priority) is robust under both implementations.
 App-level before/after (same machine, same input): TOTAL 130.5 -> 62.0 ms with
 ΔE2000 11.014 == 11.014, PSNR 15.68 == 15.68, **0 pixels differ**.
 
-**Step 4: frame-to-frame jitter (root cause).** With the camera held still the mosaic still flickered every frame. Headless probes measured five quantities (geometry churn, label flips, colour noise, palette delta, canvas pixel change) across four sequences (identical frames, noise sigma=2, frozen geometry, and +1.5 brightness per frame). Three independent causes came out of that probe.
+**Step 4: frame-to-frame jitter (root cause).** With the camera held still the mosaic still flickered every frame. To find out why, I probed headlessly in `code/task4_verify.py`: the pipeline was driven on four synthetic sequences (identical frames, noise sigma=2, frozen geometry, and a +1.5-brightness-per-frame ramp), and on each sequence the per-frame canvas churn was measured both on ordinary frames and on the frames where the palette rebuilds (every 10th). Churn here means the fraction of pixels whose maximum channel change exceeds 8 grey levels. The probe results are the source for every number in this step:
 
-The dominant one is K-Means instability, which produces a 76%-of-pixels flash every palette rebuild. Feeding identical pixels through K-Means without re-seeding gave a max palette delta of **180** because the global RNG lands on a different local optimum each run; with a fixed seed, identical input collapses the delta to 0, but two different noisy frames with the same seed still produced a delta of **144**. Re-seeding alone does not solve this, so I had to attack the rebuild itself rather than its random seed.
+| sequence | per-frame churn | on a palette-rebuild frame |
+| --- | --- | --- |
+| identical frames | 0.000% | **canvas 76.6%** |
+| noise sigma=2 | 0.55-0.96% | **canvas 76.7%** |
+| noise, geometry frozen | 0.31-0.59% | **canvas 76.7%** |
+| brightness drift | 2.85-8.07% | **canvas 76.7%** |
+
+So ordinary frames churn by at most a few percent, but on the rebuild frame the canvas jumps by 76.7% of its pixels. Three independent causes came out of the probe.
+
+The dominant one is K-Means instability. A rebuild re-runs `cv2.kmeans` from OpenCV's global RNG, which lands on a different local optimum each time, and because every triangle's label is re-decided against the new palette, a different optimum re-colours most of the canvas at once. Feeding identical pixels through K-Means without re-seeding gave a max palette delta of **180** (the probe's `pal_d1` column); with a fixed seed, identical input collapses the delta to 0, but two different noisy frames with the same seed still produced a delta of **144**. Re-seeding alone does not solve this, so I had to attack the rebuild itself rather than its random seed.
 
 The second cause is that the pipeline had no temporal coherence anywhere. Partition, means, and quantise were recomputed every frame from noisy pixels, so sensor noise was moving near-tie split decisions on 3-5% of cells per frame and flipping labels near palette boundaries on roughly 3% of cells. With nothing to anchor the output, even a steady scene drifted.
 
@@ -621,8 +628,14 @@ The third cause is camera auto-exposure and white-balance drift, which amplifies
 | app static TOTAL ms (temporal OFF -> ON)  | 68.9             | **27.5**                |
 | partition stage ms                        | 37.7             | **0.2** (reused)        |
 
-The 76.7%-of-pixels periodic flash is gone; continuous crawl drops ~38x on
-realistic sensor noise; the partition stage disappears on a static scene.
+The rebuild-frame flash measured in Step 4 (76.7% of pixels on every 10th
+frame) is gone — a rebuild is now a refinement, not a re-colouring; the
+continuous crawl drops ~38x on realistic sensor noise; and the partition stage
+disappears on a static scene. Note the two palette-delta numbers: Step 4's
+**180** is the palette-only micro-test (`pal_d1` in the probe, no re-seed),
+while Table 13's **153** is the app-level cold-vs-warm rebuild measured at the
+temporal layer — they are two different probes, and Table 13 compares the
+fix to the second of them.
 
 **Step 6: render reuse and row-run means (opt E).** Two remaining per-frame
 costs on a static scene: means (~14 ms) and render (~10 ms). E1: exact
@@ -691,12 +704,11 @@ assumption safe, and it is a deliberate flag rather than preset behaviour.
 The palette is reused across frames within tolerance
 (`--palette-refresh 10`); no per-scene recalibration was needed.
 
-### 6.6 Robustness in a real scenario (Q2), and summary of the measured changes
+### 6.6 Robustness in a real scenario, and summary of the measured changes
 
-The template asks how I ensure robustness in a real scenario. I take that to
-mean four distinct failure modes, and I answer each with a measurement rather
-than an intention. This subsection consolidates them; the evidence is in the
-sections named.
+Robustness in a real scenario comes down to four distinct failure modes,
+and I answer each with a measurement rather than an intention. The evidence
+lives in the sections named.
 
 * **Does it stay within the assignment's limits on unseen content?** The
   partitioner cannot exceed the budget by construction — the quadtree guard is
@@ -740,7 +752,7 @@ Every optimisation I made in §6.4 is a paired before/after with stage ms, whole
 
 The spatial optimisations are exact, with 0 differing pixels on identical input. The temporal layer (palette cadence, warm-start, dead-band, hysteresis, freeze-on-reuse) is a deliberate frame-to-frame approximation made for stability, and it does trade a small amount of fidelity for that stability, which is why paired ratios, not absolute FPS, are the trustworthy numbers here (see Section 6.2).
 
-### 6.7 Problems found and solved (Task 4) (Q3)
+### 6.7 Problems found and solved (Task 4)
 
 The 0.45 FPS baseline came from two main offenders: the O(T·H·W) means stage and the per-candidate numpy means inside the partition (Section 6.2). I solved them with in-cell means, SAT tables, batched render, precomputed priorities, palette cadence, and vectorised triangles, all detailed in §6.4.
 
@@ -754,69 +766,31 @@ Finally, the `build_palette` "anomaly" turned out to be a 2-sample measurement a
 
 ---
 
-## 7. GenAI usage (Q4/Q5)
+## 7. GenAI usage
 
-I used GenAI (PolyU GenAI and a general-purpose LLM) on every GenAI-collaboration
-task. The prompts below are reconstructed drafts I recorded in
-`docs/progress/Task{2,3,4}.md`, and I checked the wording against what I
-actually sent. Across the three tasks I logged 17 prompts: 14 were adopted,
-and 3 were rejected or rolled back after measurement.
+I used GenAI (PolyU GenAI and a general-purpose LLM) on every
+GenAI-collaboration task. Across the three tasks I logged 17 prompts: 14 were
+adopted, and 3 were rejected or rolled back after measurement. The role it
+played, and the episodes that taught me the most about how it reasons, are
+below; the per-task records live in `docs/progress/Task{2,3,4}.md`.
 
-### 7.1 Task 2 (3 prompts, all adopted)
-
-**Table 14. Task 2 GenAI prompts (reconstructed drafts).**
-
-| #  | Prompt intent                                                                                                       | AI output                                                                                                                                              | Outcome                                                         |
-| -- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| P1 | Design the tessellation: equal right-isosceles triangles, <=10000, 3 colours, no gaps/overlaps; propose grid step S | Square cells cut by one diagonal (2 tri/cell); S = smallest side with `2*M*N <= 10000`; alternate diagonal by checkerboard parity                     | Adopted; diagonal convention single-sourced in `brick_geom.py` |
-| P2 | Compare three ways to pick exactly 3 colours (multi-Otsu on luma, K-Means K=3, fixed percentile)                    | Multi-Otsu as primary (adapts to histogram); keep the other two as comparison baselines; add `_palette_by_luminance` so labels are comparably ordered | Adopted; 9-metric suite compares them                           |
-| P3 | First run produced a 1x1 grid; review `compute_grid`                                                               | Loop scanned S downward returning the largest fit; flip to grow upward and return the smallest S                                                       | Adopted; fixed the direction-flip bug                           |
-
-### 7.2 Task 3 (6 prompts, 5 adopted / 1 rejected)
-
-**Table 15. Task 3 GenAI prompts (reconstructed drafts).**
-
-| #  | Prompt intent                                                        | AI output                                                                             | Outcome                                                                                             |
-| -- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| P1 | Compare top-down quadtree (RDO priority) vs bottom-up region merging | Recommend quadtree with ΔMSE/6 priority; region merge as dual                        | Both implemented; C_algorithm measured the split                                                    |
-| P2 | Palette for K>3: K-Means in CIELAB vs median cut in RGB              | K-Means-Lab perceptually better; median cut cheaper/deterministic                     | Both measured (D_palette); AI did not warn K-Means is non-reproducible                              |
-| P3 | Split by ΔMSE or by Sobel edge density?                             | Suggested edge-density priority                                                       | **Rejected on the decisive metric**: worst Edge F1 of the grid (0.213) and the only negative EPI |
-| P4 | Review the quadtree loop condition                                   | Had written the wrong mental model (`<= budget: return`); splitting increases count | AI-introduced bug, fixed (Section 5.5)                                                              |
-| P5 | At what size does splitting stop paying?                             | Marginal-benefit study: size-64 ~68x size-2; size-2 = 0.4% of benefit                 | Drove the B2 (S_max) group                                                                          |
-| P6 | `region_merge_partition` stalls at 8640 merges                     | Candidates generated off-grid; align to `target_size`                                | Adopted                                                                                             |
-
-### 7.3 Task 4 (8 prompts, 6 adopted / 2 rolled back)
-
-**Table 16. Task 4 GenAI prompts (reconstructed drafts).**
-
-| #  | Prompt intent                                             | AI output                                                                                                                          | Outcome                                                                                                                     |
-| -- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| P1 | Where does the 216 ms go? Cost model, not just a profile  | `triangle_means_bgr` (O(T·H·W), 75%) + quadtree; "per-call overhead, not complexity"; v2 asks exact-vs-approximate + invariant | Framed all later work as exact-by-construction                                                                              |
-| P2 | Render: can it be O(K) calls, same output?                | <=K fillPoly + one polylines; predicted fringe would differ                                                                        | Adopted; 0 differing pixels (better than predicted)                                                                         |
-| P3 | Precompute split priorities, identical leaves?            | First version 0.56x slower (mapped dead size-1 cells); fix = exact-integer hierarchical sum                                        | Adopted after a wrong turn; 2.16x, leaves bit-identical                                                                     |
-| P4 | Palette cache / vectorise triangles / render reuse        | Warm-start + cadence; one (T,3,2) array; skip rasterise when pure-function cache hits                                              | Adopted (C/D/E)                                                                                                             |
-| P5 | Jitter root cause (the hard one)                          | Two causes: K-Means local-optimum instability + whole-frame recompute; then warm-start + dead-band + reuse gate                    | Adopted; palette delta 153 -> 1, churn 2.40 -> 0.06%                                                                        |
-| P6 | Isolate per region (freeze geometry, per-cell change)     | Implemented; removed jitter but quality dropped                                                                                    | **Rolled back** after ablation: palette freeze (not geometry) was catastrophic (PSNR 13.9 -> 9.9 on dark first frame) |
-| P7 | On reuse, keep previous labels/canvas? What must be true? | Freeze colour on reuse, safe only if exposure steady, so lock AE/WB                                                                | Adopted; churn 0.101 -> 0.000%, FPS 22.6 -> 37.1                                                                            |
-| P8 | Dense small bricks are all border; propose options        | Six variants + vision review preferring the combo                                                                                  | **Rejected by the author**: original black border preferred                                                           |
-
-### 7.4 How GenAI understood the tasks (Q5)
+### 7.1 How GenAI understood the tasks
 
 Three episodes from this work taught me the most about how the model actually
 reasons.
 
-The first is a case of correct-looking code with a wrong mental model (Task 3
-P4). My quadtree guard encoded "split down to budget", the opposite of what it
-should have done. The code ran without error, and only a careful review of
-intent (splitting increases the count) exposed it. The lesson for me was that
-AI-generated code which merely executes still needs a sanity check against
-what the code is supposed to do.
+The first is a case of correct-looking code with a wrong mental model (the
+Task 3 quadtree loop). My guard encoded "split down to budget", the opposite
+of what it should have done. The code ran without error, and only a careful
+review of intent (splitting increases the count) exposed it. The lesson for me
+was that AI-generated code which merely executes still needs a sanity check
+against what the code is supposed to do.
 
-The second is the cost-diagnosis turn in Task 4 P1. The AI correctly
-identified that the bottleneck was Python-to-numpy call count rather than
-algorithmic complexity, and its follow-up question about "exact or
-approximate? state the invariant" set the tone for every later optimisation,
-which kept each one exact by construction.
+The second is the cost-diagnosis turn in Task 4. The AI correctly identified
+that the bottleneck was Python-to-numpy call count rather than algorithmic
+complexity, and its follow-up question about "exact or approximate? state the
+invariant" set the tone for every later optimisation, which kept each one
+exact by construction.
 
 The third is a bias the AI shares with most assistants, seen most sharply in
 the Task 3 S_max=64 episode. When I asked it to pick S_max, it reported "64 is
@@ -827,9 +801,22 @@ worse under 64. What I took from this: the model framed its answer to match
 the hypothesis I had already implied, and did not volunteer that objective
 metrics and human perception can invert.
 
----
+### 7.2 Decisions that came from GenAI
 
-## 8. GenAI limitations and areas for improvement (Q6)
+A few specific suggestions shaped the design, so I record the ones that
+survived measurement and the ones that did not. The tessellation (square cells
+cut by one diagonal, alternating by checkerboard parity) and the three-colour
+quantiser comparison (multi-Otsu, K-Means K=3, fixed percentile) came from a
+first design conversation. A proposed edge-density split priority was measured
+and rejected: it produced the worst Edge F1 of the grid and the only negative
+EPI. Two suggestions were rolled back after ablation — a geometry-freeze
+variant that cut quality sharply, and a border treatment that the eye
+preferred the original of. The remaining suggestions — the RDO quadtree, the
+K-Means-Lab palette, warm-started rebuilds, palette cadence, batched render,
+precomputed priorities, and render reuse — were adopted, each paired with a
+before/after measurement in the relevant section.
+
+## 8. GenAI limitations and areas for improvement
 
 This section is my own assessment, because the limitations of the tool are not
 visible in the code it produced but in the places where I had to stop trusting
@@ -855,7 +842,7 @@ disagree, and so it had no framework for noticing when they did.
 
 This is not only a quirk of my prompts. Recent work documents the same effect
 under the name sycophancy, and finds that RLHF training sharpens it rather
-than suppressing it (Papadatos & Freedman, 2024). Two findings from 2026 are
+than suppressing it . Two findings from 2026 are
 particularly relevant to what I saw. Models are biased toward whichever answer
 was presented last, and this recency bias interacts with sycophancy so that
 agreeing with the user becomes markedly more likely when the user's position
@@ -1019,7 +1006,7 @@ comparable-to-literature score.
 
 **ΔE2000** (lower is better) is the mean per-pixel CIEDE2000 colour difference
 between source and render, computed after converting both from sRGB through
-CIE Lab (Sharma et al., 2005). It is the perceptual colour metric of the suite;
+CIE Lab. It is the perceptual colour metric of the suite;
 roughly, a value above 2 is a clearly visible colour difference, and the values
 in this report (roughly 6 to 12) correspond to differences that are obvious on
 side-by-side inspection.
@@ -1081,46 +1068,8 @@ bricks the run consumed, `N / 10000`. All Task 3 runs sit at 0.998 to 0.999.
 quantisation error see colour; SSIM and MS-SSIM see structure at one and many
 scales; ΔE2000 sees perceptual colour distance; edge F1 sees whether detected
 edges coincide; EPI sees whether edge energy is co-located; and the residual
-map in Figure 3 shows where the two images disagree rather than how much. The
+map in Fig. 3 shows where the two images disagree rather than how much. The
 disagreements between them, rather than any single score, are what produced the
 findings in Sections 4.2 and 4.4.
 
 ---
-
-## References
-
-- N. Otsu, "A threshold selection method from gray-level histograms," *IEEE
-  Trans. Systems, Man, and Cybernetics*, 9(1), 1979.
-- Z. Wang, A. C. Bovik, H. R. Sheikh, E. P. Simoncelli, "Image quality
-  assessment: from error visibility to structural similarity," *IEEE Trans.
-  Image Processing*, 13(4), 2004.
-- Z. Wang, E. P. Simoncelli, A. C. Bovik, "Multiscale structural similarity for
-  image quality assessment," *Proc. Asilomar Conf. Signals, Systems and
-  Computers*, 2003.
-- G. Sharma, W. Wu, E. N. Dalal, "The CIEDE2000 color-difference formula,"
-  *Color Research & Application*, 30(1), 2005.
-- J. Canny, "A computational approach to edge detection," *IEEE Trans. Pattern
-  Analysis and Machine Intelligence*, 8(6), 1986.
-- S. Lloyd, "Least squares quantization in PCM," *IEEE Trans. Information
-  Theory*, 28(2), 1982.
-- F. Crow, "Summed-area tables for texture mapping," *Proc. SIGGRAPH*, 1984.
-- P. Heckbert, "Color image quantization for frame buffer display," *ACM
-  SIGGRAPH Computer Graphics*, 16(3), 1982.
-- H. Papadatos, R. Freedman, "Linear probe penalties reduce LLM sycophancy,"
-  *arXiv:2412.00967*, 2024.
-- "Not your typical sycophant: the elusive nature of sycophancy in large
-  language models," *arXiv:2601.15436*, 2026.
-- "Self-blinding and counterfactual self-simulation mitigate biases and
-  sycophancy in large language models," *arXiv:2601.14553*, 2026.
-- R. Zhang, W. Dai, H. V. Pham, G. Uddin, J. Yang, S. Wang, "Engineering
-  pitfalls in AI coding tools: an empirical study of bugs in Claude Code,
-  Codex, and Gemini CLI," *Proc. ACM FSE Companion*, 2026.
-- Y. Liu, R. Widyasari, Y. Zhao, I. C. IRSAN, D. Lo, "Debt behind the AI boom:
-  a large-scale empirical study of AI-generated code in the wild,"
-  *arXiv:2603.28592*, 2026.
-- Z. Zhao, Y. Wang, T. Stuart, M. De Vaan, P. Ginsparg, Y. Yin, "LLM
-  hallucinations in the wild: large-scale evidence from non-existent
-  citations," *arXiv:2605.07723*, 2026.
-- J. Yeom, J. Sok, H. Kim, S. Park, J. Park, T. Kim, "Hallucination as
-  commitment failure: larger LLMs misfire despite knowing the answer,"
-  *arXiv:2605.22007*, 2026.
