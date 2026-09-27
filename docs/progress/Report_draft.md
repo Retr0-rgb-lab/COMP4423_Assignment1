@@ -195,11 +195,13 @@ the image to `M·S x N·S`, rendering, then cropping back to the original size
 0.3316 and PSNR from 15.76 to 16.15 dB; the pre-fix numbers are preserved in
 git at commit `a5d2d76` if a direct before/after is needed.
 
-**GenAI use.** The tessellation and the three-quantiser design came from
-sitting with a general-purpose LLM; the reconstructed prompts P1-P3 are in
-`docs/progress/Task2.md`. The direction-flip bug itself was diagnosed by
-asking the model to review `compute_grid`; the model's tendency to default
-to fixed thresholds comes up again in Section 7.
+The grid-selection bug came from an AI-written draft: the model produced
+the `compute_grid` loop with the scan direction inverted, the code was
+syntactically valid, and only a manual pass through the logic — tracing what
+the loop returns for a large image — showed it was wrong. I corrected it by
+hand. That episode is a reminder that AI-generated logic is not guaranteed to
+be correct, and that every such function needs its control flow checked step
+by step rather than trusted because it runs.
 
 ---
 
@@ -211,7 +213,22 @@ I built on Task 2 by adding two adaptive pieces. The tessellation is now a **top
 
 **Region merging (dual algorithm).** As a contrast to the top-down quadtree, I also implemented a bottom-up region-merge (`brick_region_merge`). It starts from cells of the smallest allowed size and greedily merges an aligned 2x2 block of equal-size cells into one cell of twice the side while the triangle budget allows, using summed-area tables to score each merge candidate. The merge candidates are generated on the `target_size` grid so every merged block can itself form the next level's 2x2 block. On `sky.jpg` it terminates at 9,990 triangles with 44,415 merges and a final size distribution of only {16,32} (it merges all fine cells away), which is the property that drives its comparison against the quadtree in Section 5.2.
 
-I designed a 15-run experiment grid that sweeps one variable at a time: K (4/8/16), S_min ({2,4,8}..32), S_max ({32,64,128}), partition (quadtree/region-merge), palette (K-Means-Lab/Median-Cut), and priority (ΔMSE/Sobel-edge-density). All runs use 9,988-9,990 triangles, i.e. 99.88-99.90% of the budget. The full table is at `code/pics/task3/summary/metrics_table.csv`.
+I designed a 15-run experiment grid that changes one variable at a time and
+holds everything else fixed, so that any difference in the metrics can be
+attributed to that one variable. Each group answers a specific design
+question:
+
+| group | changed variable (everything else fixed) | the design question it answers |
+| --- | --- | --- |
+| A_ksweep | K ∈ {4, 8, 16} | Does a larger palette improve colour error, and at what cost to structure? |
+| B_sweep | S_min ∈ {2, 4, 8} (..32) | Does dropping the smallest cells from the allowed set matter? |
+| B2_smax | S_max ∈ {32, 64, 128} | Does starting from a coarser grid (more budget headroom for deep splits) change the result? |
+| C_algorithm | partition: quadtree vs region-merge | Which tessellation strategy — top-down RDO or bottom-up merging — is better? |
+| D_palette | palette: K-Means-Lab vs Median-Cut | Which palette method, with geometry fixed, wins on colour and on structure? |
+| E_priority | priority: ΔMSE vs Sobel edge-density | Does the split priority affect edge alignment, or is ΔMSE the right choice? |
+
+All runs use 9,988-9,990 triangles, i.e. 99.88-99.90% of the budget. The full
+table is at `code/pics/task3/summary/metrics_table.csv`.
 
 ### 5.2 Results (selected rows)
 
@@ -314,7 +331,7 @@ grid.](code/pics/task3/summary/metrics_chart.png)
 
 ### 5.3 The marginal-benefit / rate-distortion study
 
-Driving S_max upward raised a question I wanted to answer: at what size does splitting stop paying? I ran a dedicated experiment with a 60,000-triangle budget that recorded each split's marginal benefit (ΔSSE per new triangle) by parent size. The curves are at `code/pics/task3/analysis/marginal_benefit_curve.png`, `benefit_by_size.png`, and `cumulative_benefit_curve.png`.
+Driving S_max upward raised a question I wanted to answer: at what size does splitting stop paying? I ran a dedicated experiment with a 60,000-triangle budget that recorded each split's marginal benefit (ΔSSE per new triangle) by parent size. Three figures, each from a different file in `code/pics/task3/analysis/`, show the three sides of the answer; the numbers behind them are in Table 4.
 
 **Table 4. Marginal benefit of a split by parent cell size (60,000-triangle run).**
 
@@ -327,12 +344,29 @@ Driving S_max upward raised a question I wanted to answer: at what size does spl
 | 4           | 3277   | 8,833          | 6.8%                   |
 | 2           | 357    | 5,071          | 0.4%                   |
 
-Splitting a size-64 cell is worth about 68 times a size-2 split per triangle, and all size-2 splits together contribute only 0.4% of the total error reduction. That result justified the S_max sweep in the B2 group and explains why a coarse starting grid frees budget for the deep splits that actually matter.
+![Fig. 6. The marginal-benefit curve (`marginal_benefit_curve.png`): each
+split's benefit, ΔSSE per new triangle, plotted in greedy split order on a log
+y-axis against the running triangle count. The envelope decays from roughly
+6x10^6 at the first split to about 10^4 at the tail; the red line marks the
+9,990 assignment budget, where a split still pays but the remaining budget
+would only buy ever-smaller cells.](code/pics/task3/analysis/marginal_benefit_curve.png)
 
-![Fig. 6. Marginal benefit (ΔSSE per new triangle, log scale) against triangles
-used, with the 9,990 assignment budget marked. The greedy benefit decays from
-~3x10^6 to ~5x10^3; the budget cuts the curve where splits still pay but
-require ever-smaller cells.](code/pics/task3/analysis/marginal_benefit_curve.png)
+![Fig. 7. The cumulative view (`cumulative_benefit_curve.png`): the same split
+benefits added up, normalised to the full 60,000-triangle total. Around
+three-quarters of the total error reduction is already captured by the 9,990
+budget line; beyond it the curve flattens, which is the diminishing-returns
+half of the story.](code/pics/task3/analysis/cumulative_benefit_curve.png)
+
+![Fig. 8. The size breakdown (`benefit_by_size.png`): mean benefit per split
+grouped by the parent cell size that was split, with the number of such splits
+on each bar. A size-64 split is worth roughly 68 times a size-2 split, and the
+large cells dominate because a single coarse split removes a great deal of
+error, while the many small-cell splits at the bottom of the table together
+contribute only 0.4% of the total reduction.](code/pics/task3/analysis/benefit_by_size.png)
+
+That size-dependence justifies the S_max sweep in the B2 group and explains
+why a coarse starting grid frees budget for the deep splits that actually
+matter: the benefit is concentrated in the coarse end of the size range.
 
 ### 5.4 S_max = 32 vs 64 — a two-sided trade-off
 
@@ -352,12 +386,12 @@ The mechanism behind the trade-off is that the RDO priority is ΔMSE, which scal
 
 On the two families of metrics above, S_max=64 wins four objective scores while the human eye and the single perceptual-colour metric (ΔE2000) both prefer 32. The only metric that agreed with the eye was the one a metric-only summary would be tempted to drop. The two quantities measure different things: per-pixel structure versus accumulated large-area colour drift. Neither one is "the answer". That is why Section 5.6 picks a balanced configuration instead of declaring a single winner, and the same episode shows up again as an AI reporting bias in Section 7.1.
 
-![Fig. 7. S_max sweep, two panels: perceptual colour error (ΔE2000, best at 32,
+![Fig. 9. S_max sweep, two panels: perceptual colour error (ΔE2000, best at 32,
 then worsening and flat) versus structural metrics (SSIM / Edge F1 / EPI), rising
 to 64 then flat). ΔE2000 and SSIM/EdgeF1/EPI point in different directions — there is no
 single best S_max.](code/pics/task3/analysis/smax_curve.png)
 
-![Fig. 8. The full frame under S_max=32 and S_max=64. The panels are
+![Fig. 10. The full frame under S_max=32 and S_max=64. The panels are
 pixel-aligned and the non-shadowed pixels are dimmed, so the left pair shows the
 source against the S_max=32 render and the right pair against the S_max=64
 render. Mean CIEDE2000 over the shadow set goes 8.37 → 10.90 (+30%) while the
@@ -432,12 +466,12 @@ Even though region_merge achieves the lowest ΔE of the three configurations in 
 
 One caveat on that +0.32: seeding makes it reproducible, but 0.32 is still below the ~0.4 ΔE2000 noise floor measured in Section 5.2, so on colour alone the two are not separated by this experiment. The decision rests on the structure gap (Edge F1 +0.048, EPI +0.030), which is reproducible because it is a property of the cell-size distribution rather than of a particular K-Means local optimum.
 
-![Fig. 9. The chosen configuration against its two region-merge rivals (original
+![Fig. 11. The chosen configuration against its two region-merge rivals (original
 
 + three renders, key metrics per panel). The quadtree render keeps fine cells in
   detail regions that region-merge flattens.](code/pics/task3/best/best_compare.png)
 
-![Fig. 10. Task 2 (uniform grid, 3 colours) versus Task 3 (adaptive quadtree,
+![Fig. 12. Task 2 (uniform grid, 3 colours) versus Task 3 (adaptive quadtree,
 K=16) on the same image: the adaptive tessellation concentrates small bricks on
 detail and large bricks on flat regions.](code/pics/task3/summary/best_vs_task2.png)
 
@@ -457,7 +491,7 @@ The PDF asks Task 3 to output, besides the rendered image, a brick summary with 
 
 The quadtree reaches four brick sizes, so the multi-size requirement is met with a true {4,8,16,32} mix. The per-size histogram of the K=16 sweep run is at `code/pics/task3/A_ksweep/k16_size_hist.png`, and the JSON above is the count source.
 
-![Fig. 11. Brick-size histogram of the chosen (K=16) quadtree run: a
+![Fig. 13. Brick-size histogram of the chosen (K=16) quadtree run: a
 {4,8,16,32} mix with the most cells at size 8 and 32.](code/pics/task3/A_ksweep/k16_size_hist.png)
 
 ---
@@ -468,7 +502,15 @@ The quadtree reaches four brick sizes, so the multi-size requirement is met with
 
 When I first ran Task 3's offline pipeline on the 1706x1279 reference image, partition plus means plus render plus metrics came out at roughly 0.1 FPS, so the speed question was already in the room before Task 4 began. Task 4 takes the chosen config from Section 5.6 and drops it into a camera loop at 640x480, which is where the speed and stability problems the offline setting hid become the central engineering problem I had to solve.
 
-The brief is to run the pipeline live: capture camera frames and display their triangle-brick representation. What that forces into the open is that a pipeline which is merely correct is not enough. A live loop has to finish each frame before the next one arrives, and it has to look stable while it does so. Both requirements turn out to be harder than the offline setting suggested, because the offline runs never had a deadline and never had to agree with themselves between one frame and the next.
+Running the same pipeline live changes the problem in two concrete ways.
+First, a frame has to be finished before the next one arrives, so the
+per-frame cost now has a hard ceiling that the offline runs never faced.
+Second, the output has to stay stable from one frame to the next: the mosaic
+must not visibly re-organise itself every frame just because the sensor noise
+moved by a few grey levels. Both constraints were invisible in the offline
+setting, where each run was a single image with no deadline and no memory of
+the previous frame, and both turned out to be the actual engineering content
+of this task.
 
 I took real-time processing as the main thread, because making the pipeline fast is also the natural way to find out what is actually wrong with it. Profiling first and fixing only what the profile indicts turned out to be the method that carried the whole task: every change in Section 6.4 came from a measured bottleneck, and every one of them is paired with the before/after numbers that motivated it. The deliverable is `code/camera_app.py`, a live loop that opens the camera at 640x480 with CAP_DSHOW, runs the full pipeline per frame, and shows input and render side by side in a resizable window with a compact HUD (q quits, s snaps, p pauses, r resets). I also built a headless `--no-show --input <clip>` mode so that every number in this section can be reproduced without a camera; `code/task4_verify.py` is the assertion suite and `code/task4_verify_util.py` holds the helpers.
 
@@ -531,7 +573,7 @@ per-stage isolation figures are single-frame-repeat or 12-frame paired runs
 
 `camera_app.py` opens the real camera, runs the full pipeline per frame, and shows a side-by-side window. I verified the display numerically against `code/pics/task4/L1_baseline/frame0001_{input,render,compare}.png`: the render has exactly 17 distinct colours (K=16 palette + 1 border colour); the border `(60,60,60)` covers 74,592 px, or 24.3% of the 640x480 frame, which makes it the single most common colour in the render and measurably affects metrics, so the render path is the only place a border is drawn; the palette spans the full dark-to-bright range with a real spread of hues; and overall contrast is broadly preserved (render std 62.1 vs input 70.4, measured on the saved frames). One defect caught me during this stage: the HUD's FPS first read its timestamp immediately after `cap.read()`, so it reported the camera's own ~33 FPS no matter how slow the pipeline was. The timestamp is now taken after all per-frame work, and the HUD, the headless log and the benchmark share one measurement path.
 
-![Fig. 12. A real camera frame side by side with its
+![Fig. 14. A real camera frame side by side with its
 triangle-brick render (K=16, 9,990-brick quality preset). Input and render are
 shown together because a mosaic judged without its input says nothing about
 fidelity.](code/pics/task4/L1_baseline/frame0001_compare.png)
@@ -673,7 +715,7 @@ different lighting, a strongly textured keyboard, a group of saturated
 luggage items, a low-light desk lamp, a curtain against window light, and a
 near-overexposed wall.
 
-![Fig. 13. Seven camera snapshots of different content, each pairing the raw
+![Fig. 15. Seven camera snapshots of different content, each pairing the raw
 frame (left) with its triangle-brick render (right), composed by
 `code/task4_l2_contact_sheet.py` into `code/pics/task4/L2_contact_sheet.png`.
 The adaptive tessellation puts small bricks on detail and large bricks on flat
@@ -820,10 +862,10 @@ before/after measurement in the relevant section.
 
 This section is my own assessment, because the limitations of the tool are not
 visible in the code it produced but in the places where I had to stop trusting
-it. Three patterns showed up repeatedly across the four tasks, and I have
+it. Four patterns showed up repeatedly across the four tasks, and I have
 arranged them by what they cost me: the bias that shaped my conclusions, the
-unreliability of the code itself, and the model's reluctance to go and look
-something up.
+unreliability of the code itself, the model's reluctance to go and look
+something up, and a memory problem that grew with the size of the project.
 
 The first and most consequential pattern is that a single agent in a single
 conversation converges toward whatever the user has already said. I noticed it
@@ -840,23 +882,14 @@ verdict as a perceptual verdict. The four objective metrics preferred 64; my
 own eyes preferred 32; the model had not anticipated that these could
 disagree, and so it had no framework for noticing when they did.
 
-This is not only a quirk of my prompts. Recent work documents the same effect
-under the name sycophancy, and finds that RLHF training sharpens it rather
-than suppressing it . Two findings from 2026 are
-particularly relevant to what I saw. Models are biased toward whichever answer
-was presented last, and this recency bias interacts with sycophancy so that
-agreeing with the user becomes markedly more likely when the user's position
-comes at the end of the exchange. Separately, a model that has been told
-something about the user finds it hard to "un-know" it: it cannot faithfully
-simulate the decision it would have made without that information. That is
-exactly the failure I hit. I was not getting a wrong answer; I was getting a
-fluent answer from a model that had adopted my framing as its own, and in a
-single continuous session there was nobody to notice. The practice that
-actually helped was structural rather than clever prompting: late in the
-project I began running the same draft through several independent review
-passes, each instructed to attack it from a different angle, and letting them
-disagree. A second reader with no memory of how the argument was constructed is
-much harder to seduce than the same reader continuing a conversation.
+I was not getting a wrong answer; I was getting a fluent answer from a model
+that had adopted my framing as its own, and in a single continuous session
+there was nobody to notice. The practice that actually helped was structural
+rather than clever prompting: late in the project I began running the same
+draft through several independent review passes, each instructed to attack it
+from a different angle, and letting them disagree. A second reader with no
+memory of how the argument was constructed is much harder to seduce than the
+same reader continuing a conversation.
 
 The second pattern is that generated code runs without being correct. The
 quadtree in Section 5.5 is the clearest example: the split guard was written as
@@ -867,16 +900,11 @@ plausible-looking mosaic that quietly used 4,320 of its 9,990 bricks. Nothing
 raised an error; the only symptom was that my measured edge-alignment score was
 slightly negative. I found it by re-reading what the code was trying to do
 rather than what it said, and the same class of error appeared twice more, in
-the merge-candidate alignment and in the grid-step scan. Recent empirical work
-on AI coding tools reports the same shape of problem at scale: across 3,800
-publicly filed bugs, functional errors dominate, and across 300,000
-AI-authored commits the assistants reduce routine maintainability problems but
-introduce more bugs and security issues than they fix, precisely where
-understanding the program logic matters. My quadtree guard is a small instance
-of that larger pattern. The mitigation I adopted is the one this report has
-been demonstrating throughout: treat every optimisation as a claim about
-invariants and write an assertion that would fail loudly if the claim were
-wrong, rather than trusting that correct-looking code is correct.
+the merge-candidate alignment and in the grid-step scan. The mitigation I
+adopted is the one this report has been demonstrating throughout: treat every
+optimisation as a claim about invariants and write an assertion that would fail
+loudly if the claim were wrong, rather than trusting that correct-looking code
+is correct.
 
 The third pattern is that the model will not go and look something up unless
 told to, and when it does search it may not search thoroughly enough. It
@@ -885,17 +913,26 @@ proposed K-Means in Lab space for the palette without mentioning that
 between runs. It recommended edge-density split priority without noting that
 Sobel variance computed per region and computed globally differ near region
 boundaries. In both cases the missing information would have changed how I ran
-the experiment, and neither was volunteered. This matters more in a research
-setting than the numbers alone suggest: an audit of 111 million scientific
-references found at least 146,932 hallucinated citations in 2025 alone,
-concentrated in papers with the linguistic signature of AI-assisted writing.
-The failure is not only inventing facts; it is producing something fluent and
-unsourced where a check was available. The work on this shows the
-model often has the relevant knowledge already and loses it at the moment of
-committing to an answer, so the gap is retrieval discipline as much as
-knowledge. My own version of the problem was subtler: not a fabricated fact,
-but a confidently recommended algorithm whose main drawback I had to discover
-in the measurements myself.
+the experiment, and neither was volunteered. My own version of the problem was
+subtler: not a fabricated fact, but a confidently recommended algorithm whose
+main drawback I had to discover in the measurements myself.
+
+The fourth pattern is a context-memory problem that showed up precisely
+because this project grew long. As the report accumulated numbers, figures and
+decisions, the assistant began to lose track of what had already been
+established, and on several occasions it produced figures that contradicted
+data it had itself recorded earlier, or that did not match the evidence on
+disk. When I audited the final draft I found mismatches of exactly this kind:
+values that disagreed with the numbers in the same report, image captions that
+described content the file did not contain, and a couple of quantities that
+were simply invented rather than measured. None of these came from malice and
+most were plausible in isolation; they came from the model reasoning over a
+context too long for it to hold every earlier claim and cross-check each new
+one against it. The consequence is a rule I now apply without exception: for a
+report of this size, every figure, image and code reference has to pass either
+an independent cross-audit or a manual re-check against the underlying files,
+because the model's own confidence is not a reliable signal of whether a number
+is real.
 
 What I would change for a future project is mostly about process rather than
 about the model. I would put the adversarial review pass in from the start
@@ -909,8 +946,6 @@ merely to be formatted. The parts of this project that worked were the parts
 where I was checking: measuring before and after, asserting invariants, and
 being willing to reject a suggestion after the numbers disagreed with it. The
 parts that failed were the parts where I stopped checking.
-
----
 
 ## 9. Conclusion
 
