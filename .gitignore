@@ -7,3 +7,6 @@ docs/progress/sample_report/
 # docs/progress/Report_latex_build.md). The .tex falls back to code/pics/
 # originals when absent.
 code/pics/pdfimg/
+
+# Final submission staging (built artefacts, not source)
+submission/
