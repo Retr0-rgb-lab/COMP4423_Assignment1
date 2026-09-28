@@ -150,6 +150,75 @@ Run the down-scaling step before compiling if you want the 5.2 MB output.
   `.jpg` that only exists in `pdfimg/`, so a fresh clone failed with 7 errors
   and a 1.1 MB PDF. Caught by testing the fallback, not by reading the code.
 
+## Revision — §6.3 figure and §6.5 rewrite
+
+Author review flagged two things: the Figure 14 frame was unsuited to
+demonstrate anything, and §6.5 was "just all the images listed together", with no
+statement of what each one was meant to show about the pipeline.
+
+**§6.3 / Figure 14** now shows `task4/snap_003.png` (the luggage scene) instead of
+`L1_baseline/frame0001_compare.png`. Reason: the old frame is a backlit portrait
+against a clipped window, which is the least legible content in the set, whereas
+the luggage frame shows both adaptive decisions at once — fine cells on the bag
+seams and zips against a coarse flat wall, and a 16-colour Lab palette holding
+three distinct hues apart. It is the strongest single showcase available.
+
+The numeric claims in that section (17 distinct colours, 24.3% border coverage,
+std 62.1 vs 70.4) were measured on the **L1_baseline** frame, so the text now
+says so explicitly and flags that Fig. 14 is a *different* frame. Moving the
+figure without this would have attached measurements to the wrong image.
+
+**§6.5** was restructured from a single 7-panel contact sheet to a table plus
+six individual figures:
+
+- **Table 9** states, per scene, the pipeline property it stresses. The scenes
+  are no longer a gallery; they are a test matrix.
+- The contact-sheet figure is gone. `snap_000/001/002/004/005/006` each get their
+  own figure and a caption naming what the render shows; `snap_003` is referenced
+  back to Fig. 14 rather than repeated.
+- A closing paragraph states the cross-scene finding: the live pipeline is
+  palette-limited, not geometry-limited, which is a different claim from the
+  Task 3 result where the limit was spatial.
+
+### Two factual errors found and corrected
+
+Both were in the draft's description of the Task 4 snapshots, and both were found
+by opening the seven images and comparing them against the text — the exact
+"caption describes content the file does not contain" failure §8 of the report
+confesses to. They are now fixed in **both** `Report_draft.md` and
+`Report_draft.tex` so the two do not diverge:
+
+1. `snap_006` was described as "a nearly uniform **bright** wall whose switch and
+   light bar are already close to blown out... the mosaic **loses the subject
+   almost entirely**". The file is a **dim** wall beside a bright window, and the
+   render preserves the curtain, the window edge and the chair. The real weak
+   case is banded low-contrast gradient, not subject loss; §6.5 now describes it
+   that way, and says the first fix would be dithered/error-diffusion assignment
+   rather than a larger K.
+2. `snap_001` was described as "backlit through a sheer curtain". It is a
+   front-lit close-up with a curtain in the background.
+
+The §6.6 bullet that summarised the sweep carried the same errors and was
+rewritten to match.
+
+Page count 32 → 34 (six scene figures in place of one contact sheet); figure
+count 15 → 20, tables 13 → 14. Clean build: 0 errors, 0 overfull, 0 undefined
+references.
+
+## Rebuild note (snapshots)
+
+The seven `snap_00*.png` files are now figures, so they need down-scaled copies
+too. Add this after the main list in the snippet above:
+
+```python
+for i in range(7):
+    s = 'code/pics/task4/snap_%03d.png' % i
+    im = Image.open(s); w, h = im.size
+    d = 'code/pics/pdfimg/task4/snap_%03d.jpg' % i
+    os.makedirs('code/pics/pdfimg/task4', exist_ok=True)
+    im.convert('RGB').save(d, quality=92, optimize=True)
+```
+
 ## Known limitations
 
 - The PDF is a **draft rendering** of the markdown. AGENTS.md §7 still requires

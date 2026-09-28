@@ -571,12 +571,20 @@ per-stage isolation figures are single-frame-repeat or 12-frame paired runs
 
 ### 6.3 Camera capture and display
 
-`camera_app.py` opens the real camera, runs the full pipeline per frame, and shows a side-by-side window. I verified the display numerically against `code/pics/task4/L1_baseline/frame0001_{input,render,compare}.png`: the render has exactly 17 distinct colours (K=16 palette + 1 border colour); the border `(60,60,60)` covers 74,592 px, or 24.3% of the 640x480 frame, which makes it the single most common colour in the render and measurably affects metrics, so the render path is the only place a border is drawn; the palette spans the full dark-to-bright range with a real spread of hues; and overall contrast is broadly preserved (render std 62.1 vs input 70.4, measured on the saved frames). One defect caught me during this stage: the HUD's FPS first read its timestamp immediately after `cap.read()`, so it reported the camera's own ~33 FPS no matter how slow the pipeline was. The timestamp is now taken after all per-frame work, and the HUD, the headless log and the benchmark share one measurement path.
+`camera_app.py` opens the real camera, runs the full pipeline per frame, and shows a side-by-side window. Before trusting the display I checked the saved frames numerically, on `code/pics/task4/L1_baseline/frame0001_{input,render,compare}.png` — that is a different frame from the one in Fig. 14, and I keep the two apart deliberately, because the numbers below are measurements of that frame and would be wrong to attach to another. On it: the render has exactly 17 distinct colours (K=16 palette + 1 border colour); the border `(60,60,60)` covers 74,592 px, or 24.3% of the 640x480 frame, which makes it the single most common colour in the render and measurably affects metrics, so the render path is the only place a border is drawn; the palette spans the full dark-to-bright range with a real spread of hues; and overall contrast is broadly preserved (render std 62.1 vs input 70.4, measured on the saved frames). One defect caught me during this stage: the HUD's FPS first read its timestamp immediately after `cap.read()`, so it reported the camera's own ~33 FPS no matter how slow the pipeline was. The timestamp is now taken after all per-frame work, and the HUD, the headless log and the benchmark share one measurement path.
 
-![Fig. 14. A real camera frame side by side with its
-triangle-brick render (K=16, 9,990-brick quality preset). Input and render are
-shown together because a mosaic judged without its input says nothing about
-fidelity.](code/pics/task4/L1_baseline/frame0001_compare.png)
+![Fig. 14. A real camera frame beside its triangle-brick render (K=16,
+9,990-brick quality preset), shown at the 640x480 the loop runs at. Input and
+render appear together because a mosaic judged without its input says nothing
+about fidelity. This scene is the clearest single demonstration of the two
+adaptive decisions working together: the partitioner puts its smallest cells on
+the bag seams, zips and handles while the flat wall behind stays in large coarse
+cells, and the 16-colour Lab palette keeps the sage-green, teal and maroon cases
+apart instead of collapsing them into one lukewarm average. The two panes are
+not the same brightness, though: the render is more vivid than the input,
+because a brick mean is assigned the nearest palette entry and the nearest entry
+to a saturated colour is a more saturated one. The consistent colour artefact I
+discuss below is on the portraits, not here.](code/pics/task4/snap_003.png)
 
 ### 6.4 Meeting the real-time constraint
 
@@ -707,44 +715,101 @@ scaling into the window's image area, so OpenCV's stretch becomes the identity).
 
 ### 6.5 Behaviour across different content
 
-The same pipeline was run on seven camera snapshots of different content,
-captured with `camera_app.py --lock-ae --snapshot-dir code/pics/task4/`
+The same pipeline was run, with no per-scene tuning, on seven camera snapshots
+captured with `camera_app.py --lock-ae` into `code/pics/task4/`
 (`snap_000.png` .. `snap_006.png`, each pairing the raw frame on the left with
-its triangle-brick render on the right). They cover two portraits under
-different lighting, a strongly textured keyboard, a group of saturated
-luggage items, a low-light desk lamp, a curtain against window light, and a
-near-overexposed wall.
+its render on the right). I did not pick these as a showcase set; I picked them
+so that each one breaks the pipeline in a different way, which is the only way to
+learn what a fixed configuration actually survives. Table 9 states what each
+scene is for, and the figures below are read against that column rather than as
+a gallery.
 
-![Fig. 15. Seven camera snapshots of different content, each pairing the raw
-frame (left) with its triangle-brick render (right), composed by
-`code/task4_l2_contact_sheet.py` into `code/pics/task4/L2_contact_sheet.png`.
-The adaptive tessellation puts small bricks on detail and large bricks on flat
-regions in every scene; the same configuration runs on all of them.](code/pics/task4/L2_contact_sheet.png)
+**Table 9. The seven-scene sweep and the failure mode each scene was chosen to
+probe. Every scene runs the identical configuration chosen in Section 5.6.**
 
-The renders hold up across content types. In the two portrait frames
-(snap_000 front-lit against a flat wall, snap_001 backlit through a sheer
-curtain) the glasses outline, face contour and hair edge survive as dense fine
-bricks, with one consistent artefact: the cool-toned indoor light comes out
-warmer than the input, which a white-balance pass would fix. The keyboard
-(snap_002) drives small bricks across the whole key field while the desk stays
-in large flat cells. The luggage scene (snap_003) is the one that separates
-palette from geometry: sage-green, teal and maroon cases against a warm wooden
-floor give the 16-colour palette genuinely distinct hues to separate, and the
-bricks shrink onto the bag seams and zips while the near-flat wall behind stays
-coarse. The lamp scene (snap_004) is the hardest lighting case, a blown-out bulb
-against a barely lit wall, and the lamp body and light source are still legible
-because the saturated region gets the finest cells. In the curtain frame
-(snap_005) the folds and the window grid are carried by brick density rather
-than by colour. The last frame (snap_006) is the one genuine failure: the
-source is a nearly uniform bright wall whose switch and light bar are already
-close to blown out, and at that contrast the mosaic loses the subject almost
-entirely. That is the expected behaviour of a fixed palette under clipping, and
-it is why I capture with `--lock-ae` rather than letting the camera normalise
-the exposure away — a locked exposure is what makes the fixed-palette
-assumption safe, and it is a deliberate flag rather than preset behaviour.
+| scene | content | the pipeline property it puts under stress |
+| --- | --- | --- |
+| `snap_000` | portrait against a flat wall | large flat region next to fine detail: does the partitioner actually spend its budget where the content is? |
+| `snap_001` | close-up portrait, curtain behind | dense curved structure at close range: do brick boundaries follow a face contour, or drift off it? |
+| `snap_002` | mechanical keyboard on a desk | high-frequency regular texture: is the smallest cell size fine enough, and does the palette keep neighbouring keys apart? |
+| `snap_003` | saturated luggage against a warm sofa | hue rather than luminance variation: can a K=16 palette separate distinct hues, or average them? |
+| `snap_004` | desk lamp in a dim room | extreme dynamic range: does a saturated light source survive, and what happens to the shadows around it? |
+| `snap_005` | sheer curtain against a window | structure carried by shading rather than hue: can brick density alone carry a fold pattern? |
+| `snap_006` | dim wall beside a bright window | large low-contrast gradient: this is the weak case, and I treat it as such below |
 
-The palette is reused across frames within tolerance
-(`--palette-refresh 10`); no per-scene recalibration was needed.
+![Fig. 15. Portrait against a flat wall. The partitioner spends its small cells
+on the head: the hair mass, the glasses frame and the jaw edge are resolved with
+a dense fine tessellation, while the cream wall behind carries the largest cells
+in the frame. The brick count is the same 9,990 as every other scene — the
+geometry moved to the content, not the budget.](code/pics/task4/snap_000.png)
+
+Two things are visible in `snap_000` and `snap_001` that I want to name rather
+than gloss over. First, it works: the glasses outline, the face contour and the
+hair edge all survive as dense fine bricks, and in `snap_001` the close-up shows
+the brick boundaries tracking the cheek and temple curve rather than cutting
+across them, which is the edge-alignment property EPI measures in Section 5.2.
+Second, there is one consistent colour artefact across both portraits: the
+cool-toned indoor light comes out warmer than it went in, because the palette
+assigns a skin tone to a cool-lit face from a palette built on other frames. A
+white-balance pass before quantisation would fix it, and I did not add one, so
+it is a real limitation of this build rather than a rounding detail.
+
+![Fig. 16. Close-up portrait with a curtain behind. This is the hardest case for
+boundary placement: the subject is large, well lit and fills the frame, so any
+systematic drift between the brick boundaries and the face contour would be
+immediately visible. The fine cells cluster on the glasses, eye sockets and jaw,
+and the curtain behind stays coarse.](code/pics/task4/snap_001.png)
+
+![Fig. 17. Mechanical keyboard. The densest high-frequency texture in the set.
+Two different things are being asked of the pipeline at once: the partitioner has
+to be small enough to resolve individual keycaps, and the palette has to keep
+adjacent keys from collapsing into one another. The key field is covered in the
+smallest cells in the whole sweep, while the desk below it — a much larger,
+much flatter region — stays in large cells. The keys themselves carry a marbled
+pattern, and the render reproduces it as mottling rather than resolving it, which
+is an honest limit of a 16-colour palette on a texture that varies in hue at a
+scale smaller than one brick.](code/pics/task4/snap_002.png)
+
+![Fig. 18. Desk lamp in a dim room, the extreme dynamic-range case. The light
+source is clipped in the input, and the render keeps it legible rather than
+bleeding it across the wall, because the saturated region attracts the finest
+cells. The surrounding shadows are the weak part: they are posterised into large
+flat cells, and the dark side of the frame picks up a visible cool cast from the
+palette's dark end. This is the case that motivated capturing with `--lock-ae` —
+an unlocked camera would normalise the exposure differently frame to frame and
+the mosaic would drift with it, so the flag is what makes a fixed-palette
+assumption safe here.](code/pics/task4/snap_004.png)
+
+![Fig. 19. Sheer curtain against a window. Almost all of the structure in this
+frame is in the shading rather than the hue: the folds barely change colour, so
+what carries them is brick density — the fold boundaries get rows of small cells
+and the smooth panels between them get large ones. The window frame stays
+visible as a hard geometric boundary. It is the clearest evidence in the set
+that the tessellation is responding to local contrast, not to colour
+boundaries.](code/pics/task4/snap_005.png)
+
+![Fig. 20. Dim wall beside a bright window — the weak case, kept in the set
+precisely because it is the one that behaves worst. The curtain, the window edge
+and the chair survive, so the subject is not lost. What is lost is the smooth
+low-contrast gradient across the large wall: the input shows a gentle falloff,
+and the render replaces it with a few near-flat bands with a discrete step
+between them, because a 16-colour palette quantises a slow gradient into visible
+terraces. This is the expected behaviour of a fixed palette on low-contrast
+content, and it is the failure I would fix first — not by raising K, but with a
+dithered or error-diffusion assignment, which spreads a sub-palette-step
+difference across neighbouring bricks instead of banding it.](code/pics/task4/snap_006.png)
+
+The remaining scene, the luggage pair in Fig. 14, is the case that separates
+palette from geometry: saturated hues against a warm background give the K=16
+palette genuinely distinct colours to separate, and the partition shrinks onto
+the seams. The pattern across all seven is consistent: the pipeline is limited by
+the palette, not by the geometry, wherever the content is close to a colour the
+palette does not contain — which is a different claim from the Task 3 result,
+where the limit was a spatial one.
+
+The palette was reused across frames within tolerance
+(`--palette-refresh 10`); no per-scene recalibration was needed, and no scene in
+the sweep used a different configuration.
 
 ### 6.6 Robustness in a real scenario, and summary of the measured changes
 
@@ -770,9 +835,12 @@ lives in the sections named.
   exposure — are stated there rather than assumed, and I flag that the flags
   are opt-in.
 * **Does it behave on content I did not design for?** §6.5 runs seven scenes
-  spanning portraits, hard texture, saturated colour, low light, backlit
-  fabric and a near-overexposed wall, and reports the one configuration that
-  fails rather than only the six that work.
+  spanning two portraits, a dense mechanical keyboard, saturated luggage, a
+  clipped light source in a dim room, a backlit curtain and a large
+  low-contrast wall, each chosen to stress a different part of the pipeline
+  (Table 9). It reports the one case that behaves badly — the banded wall
+  gradient — rather than only the six that work, and states what I would fix
+  first.
 
 Where robustness is *not* established, I would rather say so: this is a single
 camera on a single machine (Section 9), the test content is one image
