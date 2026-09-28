@@ -115,7 +115,7 @@ rasterising the triangles leaves \textbf{0 uncovered pixels} in the delivered
 crop. The test is geometric rather than a rasterised multiplicity count because
 \texttt{cv2.fillPoly} paints a one-pixel fringe along every internal diagonal ---
 a rasterisation convention, not an area overlap, and one I quantify separately in
-Section~\ref{sec:t2-problems}. All three pass.
+Section~\ref{sec:t4-optimise}. All three pass.
 
 Because the budget is fixed, the real work is deciding where the detail should
 go. More triangles capture more edges and texture, but they also make each
@@ -151,7 +151,7 @@ distant buildings.}{fig:testphoto}
 
 Task 1 is to call the camera, capture a frame, and display it. The program is
 \texttt{code/capture.py}: it opens the default camera with
-\texttt{cv2.VideoCapture(0)}, reads one frame, prints its shape and channel
+\texttt{cv2.VideoCapture(0)}~\cite{bradski2000opencv}, reads one frame, prints its shape and channel
 order, and shows it with \texttt{cv2.imshow} until a key is pressed, at which
 point the capture is released and the window closed. Running it on the machine
 with the camera attached:
@@ -193,10 +193,10 @@ Colour per brick
   & Mean BGR of the pixels under the triangle's mask (\texttt{cv2.fillPoly} + \texttt{cv2.mean})
   & Robust to sub-region detail; the PDF asks colour be determined from the region covered\\
 Palette (Task 2)
-  & \textbf{Multi-Otsu on BT.601 luminance} (primary), K-Means $K=3$ and a fixed 33\%/67\% percentile split as baselines
+  & \textbf{Multi-Otsu}~\cite{otsu1979} on BT.601 luminance (primary), K-Means~\cite{lloyd1982} $K=3$ and a fixed 33\%/67\% percentile split as baselines
   & Otsu thresholds adapt to the scene histogram; baselines make the results section a real comparison\\
 Palette (Task 3)
-  & \textbf{K-Means on CIE-Lab} ($K=8/16$), Median-Cut as baseline
+  & \textbf{K-Means on CIE-Lab} ($K=8/16$), Median-Cut~\cite{heckbert1982} as baseline
   & Lab is perceptually uniform; median cut is cheap and deterministic\\
 Tessellation (Task 3)
   & \textbf{Top-down RDO quadtree}, split priority $\Delta$MSE per triangle ($\Delta$SSE/6); region-merge as dual algorithm
@@ -205,7 +205,7 @@ Border
   & 1-px \texttt{\#3C3C3C} polyline per triangle
   & Visual separation; PDF permits drawn boundaries, not counted as brick colours\\
 Metrics
-  & 10-item metric suite (9 quality + 1 constraint): PSNR, SSIM, MS-SSIM (4-level mean, a practical variant of Wang et al. multi-scale SSIM), $\Delta$E2000 (CIEDE2000), Edge F1/Precision/Recall (Canny + 3-px tolerance), \textbf{edge-alignment correlation (EAC; Pearson correlation of Sobel responses --- labelled ``EPI'' below for short)}, Quantisation Error, Budget Utilisation
+  & 10-item metric suite (9 quality + 1 constraint): PSNR, SSIM~\cite{wang2004ssim}, MS-SSIM (4-level mean, a practical variant of the multi-scale SSIM of Wang et al.~\cite{wang2003msssim}), $\Delta$E2000 (CIEDE2000~\cite{sharma2005ciede2000}), Edge F1/Precision/Recall (Canny~\cite{canny1986} + 3-px tolerance), \textbf{edge-alignment correlation (EAC; Pearson correlation of Sobel responses --- labelled ``EPI'' below for short)}, Quantisation Error, Budget Utilisation
   & Each metric catches a different failure mode; the EAC/EPI metric specifically measures whether triangle boundaries align with real edges\\
 \bottomrule
 \end{tabularx}
@@ -242,9 +242,9 @@ The tessellation is a uniform $S\times S$ grid cut by checkerboard diagonals. Th
 grid step is the smallest $S$ for which $2\cdot M\cdot N \leq 10000$
 ($M=\lceil H/S\rceil$, $N=\lceil W/S\rceil$). For the three colours I compare
 three quantisation methods on identical geometry and means. The primary one is
-Multi-Otsu: an exhaustive two-threshold search over the BT.601 luminance
+Multi-Otsu~\cite{otsu1979}: an exhaustive two-threshold search over the BT.601 luminance
 histogram, with each class painted the mean BGR of its members. As baselines I
-also run K-Means with $K=3$ on BGR (K-Means++ initialisation) and a fixed
+also run K-Means~\cite{lloyd1982} with $K=3$ on BGR (K-Means++~\cite{arthur2007kmeans} initialisation) and a fixed
 percentile split at 33\%/67\% of the luminance histogram, the last being a
 deliberately naive baseline that ignores scene statistics entirely.
 
@@ -361,7 +361,7 @@ step rather than trusted because it runs.
 I built on Task 2 by adding two adaptive pieces. The tessellation is now a
 \textbf{top-down RDO quadtree} that starts from a coarse grid and splits the
 highest-priority cell ($\Delta$MSE/6) while budget remains, and the palette is
-now \textbf{K-Means-Lab} with $K>3$, with Median-Cut kept as a baseline. I
+now \textbf{K-Means-Lab} with $K>3$, with Median-Cut~\cite{heckbert1982} kept as a baseline. I
 dropped the Task 2 primary quantiser (Multi-Otsu) because Otsu is a 1-D
 luminance method that cannot produce more than a small number of threshold
 classes. Task 3 needs an arbitrary $K$-colour palette, so I replaced it with a
@@ -446,7 +446,7 @@ region edges (median $\sim$2$\times$ relative difference), so this exact row is
 not reproducible from the shipped code; the verdict below is robust under both
 implementations.)}
 
-\textbf{Noise audit --- which of these rows can carry a conclusion.} Thirteen of
+\textbf{Noise audit --- which of these rows can carry a conclusion.} Fourteen of
 the fifteen rows use K-Means-Lab, and that sweep driver never seeds OpenCV's RNG,
 so each row is a single unseeded draw. I measured the resulting spread instead of
 assuming it. Four consecutive runs of one fixed configuration (quadtree,
@@ -1722,6 +1722,57 @@ pipeline is not tuned to one image and not enough to claim generalisation.
 
 \FloatBarrier
 \FloatBarrier
+\begin{thebibliography}{9}
+\bibitem{wang2004ssim}
+Z.~Wang, A.~C. Bovik, H.~R. Sheikh, and E.~P. Simoncelli,
+``Image quality assessment: from error visibility to structural similarity,''
+\emph{IEEE Transactions on Image Processing}, vol.~13, no.~4, pp.~600--612, 2004.
+
+\bibitem{wang2003msssim}
+Z.~Wang, E.~P. Simoncelli, and A.~C. Bovik,
+``Multiscale structural similarity for image quality assessment,''
+in \emph{Proc. 37th Asilomar Conf. on Signals, Systems and Computers},
+vol.~2, pp.~1398--1402, 2003.
+
+\bibitem{sharma2005ciede2000}
+G.~Sharma, W.~Wu, and E.~N. Dalal,
+``The CIEDE2000 color-difference formula: implementation notes, supplementary test data, and mathematical observations,''
+\emph{Color Research \& Application}, vol.~30, no.~1, pp.~21--30, 2005.
+
+\bibitem{canny1986}
+J.~Canny,
+``A computational approach to edge detection,''
+\emph{IEEE Transactions on Pattern Analysis and Machine Intelligence}, vol.~8, no.~6, pp.~679--698, 1986.
+
+\bibitem{otsu1979}
+N.~Otsu,
+``A threshold selection method from gray-level histograms,''
+\emph{IEEE Transactions on Systems, Man, and Cybernetics}, vol.~9, no.~1, pp.~62--66, 1979.
+
+\bibitem{lloyd1982}
+S.~P. Lloyd,
+``Least squares quantization in PCM,''
+\emph{IEEE Transactions on Information Theory}, vol.~28, no.~2, pp.~129--137, 1982.
+
+\bibitem{arthur2007kmeans}
+D.~Arthur and S.~Vassilvitskii,
+``k-means++: the advantages of careful seeding,''
+in \emph{Proc. 18th Annual ACM-SIAM Symposium on Discrete Algorithms (SODA)},
+pp.~1027--1035, 2007.
+
+\bibitem{heckbert1982}
+P.~Heckbert,
+``Color image quantization for frame buffer display,''
+\emph{Computer Graphics (SIGGRAPH '82)}, vol.~16, no.~3, pp.~297--307, 1982.
+
+\bibitem{bradski2000opencv}
+G.~Bradski,
+``The OpenCV library,''
+\emph{Dr. Dobb's Journal of Software Tools}, 2000.
+\end{thebibliography}
+
+\FloatBarrier
+\FloatBarrier
 \appendix
 \FloatBarrier
 \FloatBarrier
@@ -1746,7 +1797,7 @@ It is the most familiar number here and the least discriminating, because a larg
 uniform colour shift costs it as much as a small structural error.
 
 \textbf{SSIM} (higher is better) is the structural similarity index of Wang et
-al.\ (2004), computed per channel on a sliding odd window of at most
+al.~\cite{wang2004ssim}, computed per channel on a sliding odd window of at most
 7$\times$7 pixels (smaller only if an image dimension forces it) and averaged.
 SSIM scores local contrast and luminance structure rather than raw pixel
 agreement, so it penalises a blurred or structurally displaced render more than
@@ -1758,18 +1809,18 @@ four progressively downsampled resolutions, using Gaussian-pyramid decimation
 that survives decimation, so it is harder to satisfy with a good low-resolution
 match and noise at the finest scale. This is a four-level arithmetic mean of
 per-level SSIM, which is a simplification of the weighted formulation in Wang et
-al.\ (2003); it is not the standard MS-SSIM weighting, and the numbers in this
+al.~\cite{wang2003msssim}; it is not the standard MS-SSIM weighting, and the numbers in this
 report should be read as a multi-scale consistency check rather than as a
 comparable-to-literature score.
 
-\textbf{$\Delta$E2000} (lower is better) is the mean per-pixel CIEDE2000 colour
+\textbf{$\Delta$E2000} (lower is better) is the mean per-pixel CIEDE2000~\cite{sharma2005ciede2000} colour
 difference between source and render, computed after converting both from sRGB
 through CIE Lab. It is the perceptual colour metric of the suite; roughly, a
 value above 2 is a clearly visible colour difference, and the values in this
 report (roughly 6 to 12) correspond to differences that are obvious on
 side-by-side inspection.
 
-\textbf{Edge F1, precision and recall} (higher is better) compare Canny edge
+\textbf{Edge F1, precision and recall} (higher is better) compare Canny~\cite{canny1986} edge
 maps of the source and the render, both extracted with $\sigma = 2.0$. Because a
 triangle boundary can sit a pixel away from a true edge and still look aligned,
 each edge map is dilated by a 3-pixel tolerance and an edge pixel counts as
@@ -1820,7 +1871,7 @@ isolates the colour-quantisation half of the pipeline from the geometry half,
 because it never looks at the rendered image. A high quantisation error with a
 reasonable PSNR means the geometry is fine but the palette cannot represent the
 image, which is the diagnostic that separated the $K$ sweep from the $S_{\max}$
-sweep in Section~\ref{sec:t2}.
+sweep in Section~\ref{sec:t3-results}.
 
 \textbf{Budget utilisation} is not a quality metric but the fraction of the
 10{,}000 bricks the run consumed, $N / 10000$. All Task 3 runs sit at 0.998 to

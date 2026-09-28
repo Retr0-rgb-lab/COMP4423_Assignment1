@@ -219,6 +219,27 @@ for i in range(7):
     im.convert('RGB').save(d, quality=92, optimize=True)
 ```
 
+## Revision — References + rendered-text fixes (2026-09-28)
+
+Author requested the References list and the rendered-text errors fixed in the
+submitted PDF. Changes are in `Report_draft.tex` only; `Report_draft.md` was
+deliberately left untouched (per the author, the markdown is not part of the
+submission, only the rendered PDF is).
+
+- **Added a `thebibliography`** (9 entries) before the appendix, and `\cite`
+  calls where the methods are named: Table 1 (Otsu, Lloyd K-Means, median cut,
+  SSIM, MS-SSIM, CIEDE2000, Canny), §4.1 (Otsu, K-Means, k-means++), §5.1
+  (median cut), Task 1 (OpenCV), Appendix A (SSIM, MS-SSIM, CIEDE2000, Canny).
+  References: Wang et al. 2004/2003, Sharma et al. 2005, Canny 1986, Otsu 1979,
+  Lloyd 1982, Arthur & Vassilvitskii 2007, Heckbert 1982, Bradski 2000.
+- **Fixed `Thirteen of the fifteen rows use K-Means-Lab` → `Fourteen`** — only
+  `D:median_cut` is not K-Means-Lab (`metrics_table.csv`).
+- **Fixed two wrong cross-references:** the intro's fringe-quantification pointer
+  `sec:t2-problems` (§4.3) → `sec:t4-optimise` (§6.4); Appendix A's
+  quantisation-diagnosis pointer `sec:t2` (§4) → `sec:t3-results` (§5.2).
+- **Rebuild:** 2 × pdflatex, 0 errors, 0 overfull, 0 undefined citations or
+  references. Page count 34 → 35 (bibliography page), 6.04 MB.
+
 ## Known limitations
 
 - The PDF is a **draft rendering** of the markdown. AGENTS.md §7 still requires
