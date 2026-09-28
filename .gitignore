@@ -1,12 +1,14 @@
 __pycache__/
 *.pyc
-# Extracted reference material (sample report); keep out of git (AGENTS 2).
-docs/progress/sample_report/
 
-# Build-only down-scaled image copies for the report PDF (see
-# docs/progress/Report_latex_build.md). The .tex falls back to code/pics/
-# originals when absent.
+# This repository mirrors the submitted payload (report PDF + code source).
+# Process records, course materials, output renders and build artefacts are
+# kept locally but excluded from the repository.
+docs/
+AGENTS.md
+code/pics/task1_capture.png
+code/pics/task2/
+code/pics/task3/
+code/pics/task4/
 code/pics/pdfimg/
-
-# Final submission staging (built artefacts, not source)
 submission/

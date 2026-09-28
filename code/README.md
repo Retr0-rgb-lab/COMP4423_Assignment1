@@ -58,8 +58,8 @@ duplicate code. Use this table to navigate instead.
 
 ## Where to look next
 
-- Decisions, measurements, known limitations: `docs/progress/Task0_brief.md` ..
-  `Task4.md` (the report's first-hand evidence).
-- Run commands: `README.md` at the repo root, and `AGENTS.md` section 9.
-- Outputs and figures: `code/pics/` (inputs in `pics/`, per-task outputs in
-  `pics/task2/`, `pics/task3/`, `pics/task4/`).
+- Run commands: `README.md` at the repo root.
+- Outputs and figures: written under `code/pics/` at run time (`pics/task2/`,
+  `pics/task3/`, `pics/task4/` once the drivers have run).
+- The submitted report (`Assignment1_Report_24101322D_HUANG_Haoran.pdf`, repo
+  root) records the decisions, measurements and known limitations.

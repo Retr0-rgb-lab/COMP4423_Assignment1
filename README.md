@@ -4,9 +4,9 @@ Convert an image (and a live camera) into a mosaic of right-isosceles
 triangles, under a 10000-triangle budget, with per-task constraints (3 colours
 for Task 2, multiple sizes + >3 colours for Task 3, real-time for Task 4).
 
-The design, decisions, measurements and known limitations are recorded in
-`docs/progress/Task0_brief.md` .. `Task4.md`. That is the first-hand evidence
-for the report; read it before quoting any number.
+The submitted report is `Assignment1_Report_24101322D_HUANG_Haoran.pdf` at the
+repository root; it documents the design decisions, measurements and known
+limitations.
 
 ## Environment
 
@@ -24,9 +24,7 @@ for the report; read it before quoting any number.
 
 ```
 code/            all source (engine modules brick_*.py + per-task drivers)
-code/pics/       every input image and every output render/figure
-docs/progress/   per-task engineering records (the report's source material)
-docs/materials/  read-only originals (assignment PDF, report template, samples)
+code/pics/       input image (sky.jpg); output renders are written here
 ```
 
 ## Run
@@ -57,6 +55,5 @@ Task 4 presets: `--preset quality|balanced|fast`; brick budget `--budget N`.
 
 - Paths you PASS to a driver resolve against the current directory; the built-in
   defaults are `__file__`-relative.
-- `Task4.md` "Known limitations" lists what is deliberately not solved (single
-  machine / one camera, Level 2 scenes not captured, per-cell foreground
-  isolation not implemented).
+- Outputs under `code/pics/` (for example `task2/out_task2.png`) are produced by
+  the commands above at run time; they are not stored in the repository.
